@@ -1,0 +1,34 @@
+﻿namespace PgDataHub.Metadata;
+
+public sealed class CollectionMetadata
+{
+    public string Schema { get; set; } = "";
+    public string Name { get; set; } = "";
+    public string Type { get; set; } = "";
+
+    public bool IsSpatial { get; set; }
+
+    public string? GeometryColumn { get; set; }
+    public string? GeometryType { get; set; }
+    public int? Srid { get; set; }
+
+    public string? PrimaryKey { get; set; }
+
+    public List<ColumnMetadata> Columns { get; set; } = [];
+}
+
+public sealed class ColumnMetadata
+{
+    public string Name { get; set; } = "";
+    public string Type { get; set; } = "";
+    public bool Nullable { get; set; }
+}
+
+public sealed class FunctionMetadata
+{
+    public string Schema { get; set; } = "";
+    public string Name { get; set; } = "";
+    public string Arguments { get; set; } = "";
+    public string ReturnType { get; set; } = "";
+    public string? Description { get; set; }
+}
