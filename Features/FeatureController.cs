@@ -73,4 +73,126 @@ public sealed class FeatureController : ControllerBase
             return BadRequest(new { error = ex.Message });
         }
     }
+    [HttpGet("{collectionId}/queryables")]
+    public async Task<IActionResult> GetQueryablesAsync(
+    string collectionId,
+    CancellationToken cancellationToken)
+    {
+        var collection = await _featureService.GetCollectionAsync(collectionId, cancellationToken);
+
+        if (collection is null)
+        {
+            return NotFound(new { error = "Collection not found", collectionId });
+        }
+
+        var properties = new Dictionary<string, object>();
+
+        foreach (var column in collection.Columns)
+        {
+            var item = new Dictionary<string, object>();
+
+            var type = column.Type.ToLowerInvariant();
+
+            if (type.Contains("int"))
+            {
+                item["type"] = "integer";
+            }
+            else if (type.StartsWith("numeric")
+                || type.StartsWith("decimal")
+                || type == "real"
+                || type == "double precision")
+            {
+                item["type"] = "number";
+            }
+            else if (type == "boolean")
+            {
+                item["type"] = "boolean";
+            }
+            else if (type == "date")
+            {
+                item["type"] = "string";
+                item["format"] = "date";
+            }
+            else if (type.Contains("timestamp"))
+            {
+                item["type"] = "string";
+                item["format"] = "date-time";
+            }
+            else if (type == "uuid")
+            {
+                item["type"] = "string";
+                item["format"] = "uuid";
+            }
+            else
+            {
+                item["type"] = "string";
+            }
+
+            if (collection.GeometryColumn is not null &&
+                column.Name.Equals(collection.GeometryColumn, StringComparison.OrdinalIgnoreCase))
+            {
+                item["type"] = "object";
+                item["format"] = "geometry";
+
+                if (collection.GeometryType is not null)
+                {
+                    item["geometryType"] = collection.GeometryType;
+                }
+
+                if (collection.Srid.HasValue)
+                {
+                    item["srid"] = collection.Srid.Value;
+                }
+            }
+
+            properties[column.Name] = item;
+        }
+
+        return Ok(new
+        {
+            title = $"{collection.Schema}.{collection.Name}",
+            type = "object",
+            properties
+        });
+    }
+    [HttpGet("{collectionId}/items/{id}")]
+    public async Task<IActionResult> GetFeatureByIdAsync(
+    string collectionId,
+    string id,
+    CancellationToken ct)
+    {
+        var result =
+            await _featureService.GetFeatureByIdAsync(
+                collectionId,
+                id,
+                ct);
+
+        if (result is null)
+        {
+            return NotFound(new
+            {
+                error = "Collection not found",
+                collectionId
+            });
+        }
+
+        await using (result)
+        {
+            if (!result.Reader.HasRows)
+            {
+                return NotFound(new
+                {
+                    error = "Feature not found",
+                    id
+                });
+            }
+
+            await JsonWriter.WriteAsync(
+                Response,
+                result,
+                ct);
+        }
+
+        return new EmptyResult();
+    }
 }

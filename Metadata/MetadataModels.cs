@@ -24,11 +24,40 @@ public sealed class ColumnMetadata
     public bool Nullable { get; set; }
 }
 
+public enum FunctionReturnType
+{
+    Rowset,
+    Scalar,
+    Json,
+    Composite,
+    Array
+}
+
 public sealed class FunctionMetadata
 {
     public string Schema { get; set; } = "";
+
     public string Name { get; set; } = "";
-    public string Arguments { get; set; } = "";
-    public string ReturnType { get; set; } = "";
-    public string? Description { get; set; }
+
+    public string Description { get; set; } = "";
+
+    public FunctionReturnType ReturnType { get; set; }
+
+    public List<FunctionParameterMetadata> Parameters { get; set; } = [];
+
+    public List<FunctionColumnMetadata> Columns { get; set; } = [];
+}
+
+public sealed class FunctionParameterMetadata
+{
+    public string Name { get; set; } = "";
+
+    public string Type { get; set; } = "";
+}
+
+public sealed class FunctionColumnMetadata
+{
+    public string Name { get; set; } = "";
+
+    public string Type { get; set; } = "";
 }

@@ -1,9 +1,10 @@
-using System.IO.Compression;
 using Microsoft.AspNetCore.ResponseCompression;
 using Npgsql;
 using PgDataHub.Config;
 using PgDataHub.Features;
+using PgDataHub.Functions;
 using PgDataHub.Metadata;
+using System.IO.Compression;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -22,7 +23,8 @@ builder.Services.AddSingleton<MetadataService>();
 builder.Services.AddSingleton<FeatureQueryBuilder>();
 
 builder.Services.AddScoped<FeatureService>();
-
+builder.Services.AddScoped<FunctionService>();
+builder.Services.AddHostedService<MetadataListenerService>();
 builder.Services.AddControllers();
 
 builder.Services.AddResponseCompression(options =>

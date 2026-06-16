@@ -35,27 +35,15 @@ public sealed class MetadataController : ControllerBase
             });
     }
 
-    [HttpPost("refresh")]
-    [ProducesResponseType(
-        StatusCodes.Status204NoContent)]
-    public async Task<IActionResult>
-        Refresh(
-            CancellationToken cancellationToken)
+
+    public sealed class MetadataResponse
     {
-        await _metadata.RefreshAsync(
-            cancellationToken);
+        public IReadOnlyList<CollectionMetadata>
+            Collections
+        { get; init; } = [];
 
-        return NoContent();
+        public IReadOnlyList<FunctionMetadata>
+            Functions
+        { get; init; } = [];
     }
-}
-
-public sealed class MetadataResponse
-{
-    public IReadOnlyList<CollectionMetadata>
-        Collections
-    { get; init; } = [];
-
-    public IReadOnlyList<FunctionMetadata>
-        Functions
-    { get; init; } = [];
 }

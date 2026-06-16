@@ -145,4 +145,34 @@ public sealed class FeatureService
             query,
             ct);
     }
+    public async Task<FeatureResult?>
+    GetFeatureByIdAsync(
+        string collectionId,
+        string id,
+        CancellationToken ct = default)
+    {
+        var collection =
+            await GetCollectionAsync(
+                collectionId,
+                ct);
+
+        if (collection is null)
+            return null;
+
+        if (string.IsNullOrEmpty(collection.PrimaryKey))
+        {
+            throw new InvalidOperationException(
+                $"Collection '{collectionId}' does not support Feature By Id.");
+        }
+
+        var query =
+            _queryBuilder.BuildFeatureById(
+                collection,
+                id);
+
+        return await ExecuteAsync(
+            query,
+            ct);
+    }
+
 }

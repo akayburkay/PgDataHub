@@ -37,7 +37,6 @@ public sealed class FeatureQueryParameters
 
     public int? ResponseCrsSrid { get; init; }
 
-    public string? Datetime { get; init; }
     public bool Count { get; init; }
     public IReadOnlyList<PropertyFilter> Filters { get; init; } = [];
 }
@@ -47,7 +46,7 @@ public static class ReservedQueryKeys
     public static readonly HashSet<string> Names = new(StringComparer.OrdinalIgnoreCase)
     {
         "limit", "offset", "select", "distinct", "orderby",
-        "bbox", "bbox-crs", "crs", "datetime", "count", "f"
+        "bbox", "bbox-crs", "crs",  "count", "f"
     };
 }
 
@@ -125,6 +124,52 @@ offset {offset}
             Collection = collection,
             Sql = sql,
             Parameters = sqlParameters
+        };
+    }
+
+    public FeatureQuery BuildFeatureById(
+    CollectionMetadata collection,
+    string id)
+    {
+        var columns = BuildColumnList(
+            collection,
+            null,
+            null);
+
+        if (columns.Count == 0)
+        {
+            throw new InvalidOperationException(
+                $"Collection '{collection.Schema}.{collection.Name}' has no visible columns.");
+        }
+
+        var primaryKeyColumn =
+            collection.Columns
+                .First(c => c.Name.Equals(
+                    collection.PrimaryKey,
+                    StringComparison.OrdinalIgnoreCase));
+
+        var parameter = CreateParameter(
+            "@id",
+            primaryKeyColumn,
+            id);
+
+        var sql =
+    $"""
+select
+    {string.Join(",\n    ", columns)}
+from "{collection.Schema}"."{collection.Name}" t
+where t."{collection.PrimaryKey}" = @id
+limit 1
+""";
+
+        return new FeatureQuery
+        {
+            Collection = collection,
+            Sql = sql,
+            Parameters =
+            [
+                parameter
+            ]
         };
     }
 
@@ -223,78 +268,7 @@ offset {offset}
         }
     }
 
-    // ----------------------------------------------------------------
-    // DATETIME
-    // ----------------------------------------------------------------
-    //private void AppendDatetimeFilter(
-    //    CollectionMetadata collection,
-    //    string? datetime,
-    //    List<string> whereClauses,
-    //    List<NpgsqlParameter> sqlParameters)
-    //{
-    //    if (string.IsNullOrWhiteSpace(datetime))
-    //        return;
-
-    //    var dateColumn = collection.PrimaryDatetimeColumn;
-
-    //    if (dateColumn is null)
-    //    {
-    //        throw new InvalidOperationException(
-    //            $"Collection '{collection.Schema}.{collection.Name}' has no datetime column.");
-    //    }
-
-    //    var idx = sqlParameters.Count;
-
-    //    if (datetime.Contains('/'))
-    //    {
-    //        var parts = datetime.Split('/', 2);
-    //        var startRaw = parts[0];
-    //        var endRaw = parts[1];
-
-    //        if (startRaw != "..")
-    //        {
-    //            var p = $"@dt_s{idx}";
-    //            whereClauses.Add($"t.\"{dateColumn}\" >= {p}");
-    //            sqlParameters.Add(new NpgsqlParameter(p, NpgsqlDbType.TimestampTz)
-    //            {
-    //                Value = ParseDateTime(startRaw, "datetime start")
-    //            });
-    //        }
-
-    //        if (endRaw != "..")
-    //        {
-    //            var p = $"@dt_e{idx}";
-    //            whereClauses.Add($"t.\"{dateColumn}\" <= {p}");
-    //            sqlParameters.Add(new NpgsqlParameter(p, NpgsqlDbType.TimestampTz)
-    //            {
-    //                Value = ParseDateTime(endRaw, "datetime end")
-    //            });
-    //        }
-    //    }
-    //    else
-    //    {
-    //        var p = $"@dt{idx}";
-    //        whereClauses.Add($"t.\"{dateColumn}\" = {p}");
-    //        sqlParameters.Add(new NpgsqlParameter(p, NpgsqlDbType.TimestampTz)
-    //        {
-    //            Value = ParseDateTime(datetime, "datetime")
-    //        });
-    //    }
-    //}
-
-    private static DateTimeOffset ParseDateTime(string raw, string ctx)
-    {
-        if (!DateTimeOffset.TryParse(
-                raw, CultureInfo.InvariantCulture,
-                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
-                out var result))
-        {
-            throw new ArgumentException($"Invalid {ctx} value: '{raw}'. Expected ISO-8601.");
-        }
-
-        return result;
-    }
-
+   
 
     private void AppendPropertyFilters(
         CollectionMetadata collection,
@@ -504,6 +478,14 @@ offset {offset}
                     bool.Parse(raw));
             }
 
+           
+
+            if (type == "uuid")
+            {
+                return new NpgsqlParameter(
+                    name,
+                    Guid.Parse(raw));
+            }
             if (type == "date")
             {
                 return new NpgsqlParameter(
@@ -511,8 +493,7 @@ offset {offset}
                     DateTime.Parse(
                         raw,
                         CultureInfo.InvariantCulture,
-                        DateTimeStyles.None)
-                        .Date);
+                        DateTimeStyles.None).Date);
             }
 
             if (type.Contains("timestamp"))
@@ -524,13 +505,6 @@ offset {offset}
                         CultureInfo.InvariantCulture,
                         DateTimeStyles.AssumeUniversal |
                         DateTimeStyles.AdjustToUniversal));
-            }
-
-            if (type == "uuid")
-            {
-                return new NpgsqlParameter(
-                    name,
-                    Guid.Parse(raw));
             }
         }
         catch
@@ -636,11 +610,7 @@ public static class FeatureQueryParametersParser
             responseCrs = ParseCrs(crsRaw, "crs");
         }
 
-        string? datetime = null;
-        if (query.TryGetValue("datetime", out var dtRaw) && !string.IsNullOrWhiteSpace(dtRaw))
-        {
-            datetime = dtRaw;
-        }
+       
 
         var filters = new List<PropertyFilter>();
 
@@ -685,7 +655,6 @@ public static class FeatureQueryParametersParser
             Bbox = bbox,
             BboxCrsSrid = bboxCrs,
             ResponseCrsSrid = responseCrs,
-            Datetime = datetime,
             Count = count,
             Filters = filters
         };
