@@ -1,4 +1,8 @@
-## TODO
+# PgDataHub
+
+Version: v0.9.0
+
+## TODO  
 
 - Metadata refresh endpoint
 - Database trigger based metadata refresh
