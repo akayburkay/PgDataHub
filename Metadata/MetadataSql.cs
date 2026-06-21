@@ -10,7 +10,6 @@ internal static class MetadataSql
                 table_type
             FROM information_schema.tables
             WHERE table_schema NOT IN ('pg_catalog', 'information_schema', 'topology')
-              AND table_type <> 'VIEW'
               AND table_name NOT IN (
                   'geometry_columns',
                   'geography_columns',

@@ -24,8 +24,7 @@ builder.Services.AddSingleton<FeatureQueryBuilder>();
 
 builder.Services.AddScoped<FeatureService>();
 builder.Services.AddScoped<FunctionService>();
-builder.Services.AddHostedService<MetadataListenerService>();
-builder.Services.AddControllers();
+builder.Services.AddHostedService<MetadataListenerService>(); builder.Services.AddControllers();
 
 builder.Services.AddResponseCompression(options =>
 {
@@ -64,7 +63,7 @@ if (app.Environment.IsDevelopment())
     app.UseSwagger();
     app.UseSwaggerUI();
 }
-   
+
 app.MapControllers();
 
 app.Run();

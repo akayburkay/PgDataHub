@@ -1,70 +1,125 @@
 ﻿using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Npgsql;
+using PgDataHub.Config;
 
 namespace PgDataHub.Metadata;
 
 public sealed class MetadataListenerService : BackgroundService
 {
-    private readonly NpgsqlDataSource _dataSource;
-    private readonly MetadataService _metadata;
+    private readonly MetadataService _metadataService;
     private readonly ILogger<MetadataListenerService> _logger;
 
     public MetadataListenerService(
-        NpgsqlDataSource dataSource,
-        MetadataService metadata,
+        MetadataService metadataService,
         ILogger<MetadataListenerService> logger)
     {
-        _dataSource = dataSource;
-        _metadata = metadata;
+        _metadataService = metadataService;
         _logger = logger;
     }
 
-    protected override async Task ExecuteAsync(
-        CancellationToken stoppingToken)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        await using var connection =
-            await _dataSource.OpenConnectionAsync(stoppingToken);
+        await EnsureTriggerAsync(stoppingToken);
 
-        connection.Notification += async (_, e) =>
+        await using var conn = await Db.OpenConnectionAsync(stoppingToken);
+
+        conn.Notification += (_, e) =>
         {
-            if (e.Channel != "pgdatahub_metadata")
-                return;
-
             _logger.LogInformation(
-                "[Metadata] PostgreSQL schema change detected. Refreshing cache.");
+                "[MetadataListener] PostgreSQL notification received: {Payload}",
+                e.Payload);
 
-            try
+            _ = Task.Run(async () =>
             {
-                await _metadata.RefreshAsync(stoppingToken);
+                try
+                {
+                    _logger.LogInformation(
+                        "[MetadataListener] Refreshing metadata cache...");
 
-                _logger.LogInformation(
-                    "[Metadata] Cache refresh completed.");
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(
-                    ex,
-                    "[Metadata] Cache refresh failed.");
-            }
+                    await _metadataService.RefreshAsync();
+
+                    _logger.LogInformation(
+                        "[MetadataListener] Metadata cache refreshed.");
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(
+                        ex,
+                        "[MetadataListener] Metadata refresh failed.");
+                }
+            });
         };
 
-        await using (var command = new NpgsqlCommand(
-            "LISTEN pgdatahub_metadata;",
-            connection))
+
+        await using (var cmd = new NpgsqlCommand(
+            "LISTEN metadata_changed;", conn))
         {
-            await command.ExecuteNonQueryAsync(stoppingToken);
+            await cmd.ExecuteNonQueryAsync(stoppingToken);
         }
 
         _logger.LogInformation(
-            "[Metadata] Listening PostgreSQL channel: pgdatahub_metadata");
+            "[MetadataListener] Listening PostgreSQL metadata changes.");
 
         while (!stoppingToken.IsCancellationRequested)
         {
-            await connection.WaitAsync(stoppingToken);
+            await conn.WaitAsync(stoppingToken);
+        }
+    }
+
+
+    private static async Task EnsureTriggerAsync(CancellationToken ct)
+    {
+        await using var conn = await Db.OpenConnectionAsync(ct);
+
+
+        var functionSql = """
+            CREATE OR REPLACE FUNCTION pgdatahub_metadata_notify()
+            RETURNS event_trigger
+            LANGUAGE plpgsql
+            AS $$
+            BEGIN
+                PERFORM pg_notify(
+                    'metadata_changed',
+                    TG_TAG
+                );
+            END;
+            $$;
+            """;
+
+        await using (var cmd = new NpgsqlCommand(functionSql, conn))
+        {
+            await cmd.ExecuteNonQueryAsync(ct);
         }
 
-        _logger.LogInformation(
-            "[Metadata] Listener stopped.");
+
+        var existsSql = """
+            SELECT EXISTS(
+                SELECT 1
+                FROM pg_event_trigger
+                WHERE evtname = 'pgdatahub_metadata_trigger'
+            );
+            """;
+
+        bool exists;
+
+        await using (var cmd = new NpgsqlCommand(existsSql, conn))
+        {
+            exists = (bool)(await cmd.ExecuteScalarAsync(ct))!;
+        }
+
+
+        if (!exists)
+        {
+            var triggerSql = """
+                CREATE EVENT TRIGGER pgdatahub_metadata_trigger
+                ON ddl_command_end
+                EXECUTE FUNCTION pgdatahub_metadata_notify();
+                """;
+
+            await using var cmd = new NpgsqlCommand(triggerSql, conn);
+
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
     }
 }

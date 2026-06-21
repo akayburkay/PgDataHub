@@ -1,6 +1,25 @@
+# Build
 bin/
 obj/
-.vs/
+
+# User specific files
 *.user
 *.suo
-*.cache
+*.userosscache
+*.sln.docstates
+
+# Visual Studio
+.vs/
+
+# Rider
+.idea/
+
+# VS Code
+.vscode/
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
