@@ -16,7 +16,7 @@ A lightweight .NET 10 web server that instantly exposes PostgreSQL tables, views
 ## Quick Start
 
 ```bash
-git clone https://github.com/you/PgDataHub.git
+git clone https://github.com/akayburkay/PgDataHub.git
 cd PgDataHub
 # edit pgdatahub.ini
 dotnet run
