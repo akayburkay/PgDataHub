@@ -10,7 +10,7 @@ public sealed class PgDataHubConfig
                 $"Configuration file not found: {path}");
         }
 
-        var config = new PgDataHubConfig();
+        var config = new PgDataHubConfig { SourcePath = path };
 
         string? section = null;
 
@@ -50,7 +50,21 @@ public sealed class PgDataHubConfig
         string key,
         string value)
     {
-        switch (section.ToLowerInvariant())
+        var lower = section.ToLowerInvariant();
+
+        if (lower.StartsWith("role."))
+        {
+            ParseRole(config, section["role.".Length..], key, value);
+            return;
+        }
+
+        if (lower.StartsWith("apikey."))
+        {
+            ParseApiKeyData(config, section["apikey.".Length..], key, value);
+            return;
+        }
+
+        switch (lower)
         {
             case "database":
                 ParseDatabase(config.Database, key, value);
@@ -66,6 +80,18 @@ public sealed class PgDataHubConfig
 
             case "function":
                 ParseFunction(config.Function, key, value);
+                break;
+
+            case "auth":
+                ParseAuth(config.Auth, key, value);
+                break;
+
+            case "auth.apikey":
+                ParseApiKey(config.Auth.ApiKey, key, value);
+                break;
+
+            case "auth.jwt":
+                ParseJwt(config.Auth.Jwt, key, value);
                 break;
 
             default:
@@ -225,6 +251,192 @@ public sealed class PgDataHubConfig
         }
     }
 
+    private static void ParseAuth(
+        AuthConfig auth,
+        string key,
+        string value)
+    {
+        switch (key.ToLowerInvariant())
+        {
+            case "enabled":
+                auth.Enabled = ParseBool(value, auth.Enabled);
+                break;
+
+            case "defaultrole":
+                auth.DefaultRole = value;
+                break;
+
+            case "adminrole":
+                auth.AdminRole = value;
+                break;
+        }
+    }
+
+    private static void ParseApiKey(
+        ApiKeyAuthConfig apiKey,
+        string key,
+        string value)
+    {
+        switch (key.ToLowerInvariant())
+        {
+            case "enabled":
+                apiKey.Enabled = ParseBool(value, apiKey.Enabled);
+                break;
+
+            case "header":
+                apiKey.Header = value;
+                break;
+        }
+    }
+
+    private static void ParseJwt(
+        JwtAuthConfig jwt,
+        string key,
+        string value)
+    {
+        switch (key.ToLowerInvariant())
+        {
+            case "enabled":
+                jwt.Enabled = ParseBool(value, jwt.Enabled);
+                break;
+
+            case "authority":
+                jwt.Authority = value;
+                break;
+
+            case "audience":
+                jwt.Audience = value;
+                break;
+
+            case "roleclaim":
+                jwt.RoleClaim = value;
+                break;
+        }
+    }
+
+    private static void ParseRole(
+        PgDataHubConfig config,
+        string roleName,
+        string key,
+        string value)
+    {
+        var role = config.Roles.FirstOrDefault(r =>
+            string.Equals(r.Name, roleName, StringComparison.OrdinalIgnoreCase));
+
+        if (role is null)
+        {
+            role = new AuthRoleConfig { Name = roleName };
+            config.Roles.Add(role);
+        }
+
+        var k = key.ToLowerInvariant();
+
+        switch (k)
+        {
+            case "description":
+                role.Description = value;
+                return;
+            case "collections.allow":
+                role.CollectionsAllow = Split(value);
+                return;
+            case "collections.deny":
+                role.CollectionsDeny = Split(value);
+                return;
+            case "functions.allow":
+                role.FunctionsAllow = Split(value);
+                return;
+            case "functions.deny":
+                role.FunctionsDeny = Split(value);
+                return;
+        }
+
+        // columns.<pattern>.allow | columns.<pattern>.hide
+        if (k.StartsWith("columns."))
+        {
+            var rest = key["columns.".Length..];
+            var lastDot = rest.LastIndexOf('.');
+            if (lastDot <= 0)
+                return;
+
+            var pattern = rest[..lastDot];
+            var kind = rest[(lastDot + 1)..].ToLowerInvariant();
+
+            if (!role.ColumnRules.TryGetValue(pattern, out var rule))
+            {
+                rule = new AuthColumnRuleConfig();
+                role.ColumnRules[pattern] = rule;
+            }
+
+            if (kind == "allow")
+                rule.Allow = Split(value);
+            else if (kind == "hide")
+                rule.Hide = Split(value);
+        }
+    }
+
+    private static void ParseApiKeyData(
+        PgDataHubConfig config,
+        string idText,
+        string key,
+        string value)
+    {
+        if (!long.TryParse(idText, out var id))
+            return;
+
+        var apiKey = config.ApiKeys.FirstOrDefault(k => k.Id == id);
+
+        if (apiKey is null)
+        {
+            apiKey = new AuthApiKeyConfig { Id = id };
+            config.ApiKeys.Add(apiKey);
+        }
+
+        switch (key.ToLowerInvariant())
+        {
+            case "name":
+                apiKey.Name = value;
+                break;
+            case "owner":
+                apiKey.Owner = value;
+                break;
+            case "description":
+                apiKey.Description = value;
+                break;
+            case "hash":
+                apiKey.Hash = value;
+                break;
+            case "role":
+                apiKey.Role = value;
+                break;
+            case "enabled":
+                apiKey.Enabled = ParseBool(value, apiKey.Enabled);
+                break;
+            case "expires":
+                apiKey.Expires = ParseDate(value);
+                break;
+            case "lastused":
+                apiKey.LastUsed = ParseDate(value);
+                break;
+        }
+    }
+
+    private static DateTimeOffset? ParseDate(string value)
+        => DateTimeOffset.TryParse(
+            value,
+            System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.RoundtripKind,
+            out var d)
+            ? d
+            : null;
+
+    private static bool ParseBool(string value, bool fallback)
+        => value.Trim().ToLowerInvariant() switch
+        {
+            "true" or "1" or "yes" or "on" => true,
+            "false" or "0" or "no" or "off" => false,
+            _ => fallback
+        };
+
     private static List<string> Split(string value)
     {
         if (string.IsNullOrWhiteSpace(value))
@@ -247,6 +459,84 @@ public sealed class PgDataHubConfig
 
     public Dictionary<string, CollectionConfig> Tables { get; set; }
         = new(StringComparer.OrdinalIgnoreCase);
+
+    public AuthConfig Auth { get; set; } = new();
+
+    /// <summary>Roles and their permissions (auth data, stored in this INI).</summary>
+    public List<AuthRoleConfig> Roles { get; set; } = [];
+
+    /// <summary>API keys (auth data, stored in this INI; only hashes are kept).</summary>
+    public List<AuthApiKeyConfig> ApiKeys { get; set; } = [];
+
+    /// <summary>Path of the INI this config was loaded from (used for write-back).</summary>
+    public string SourcePath { get; set; } = "";
+}
+
+public sealed class AuthRoleConfig
+{
+    public string Name { get; set; } = "";
+    public string? Description { get; set; }
+    public List<string> CollectionsAllow { get; set; } = [];
+    public List<string> CollectionsDeny { get; set; } = [];
+    public List<string> FunctionsAllow { get; set; } = [];
+    public List<string> FunctionsDeny { get; set; } = [];
+
+    /// <summary>Per-pattern column rules, keyed by collection glob pattern.</summary>
+    public Dictionary<string, AuthColumnRuleConfig> ColumnRules { get; set; }
+        = new(StringComparer.OrdinalIgnoreCase);
+}
+
+public sealed class AuthColumnRuleConfig
+{
+    public List<string> Allow { get; set; } = [];
+    public List<string> Hide { get; set; } = [];
+}
+
+public sealed class AuthApiKeyConfig
+{
+    public long Id { get; set; }
+    public string Name { get; set; } = "";
+    public string? Owner { get; set; }
+    public string? Description { get; set; }
+    public string Hash { get; set; } = "";
+    public string Role { get; set; } = "";
+    public bool Enabled { get; set; } = true;
+    public DateTimeOffset? Expires { get; set; }
+    public DateTimeOffset? LastUsed { get; set; }
+}
+
+public sealed class AuthConfig
+{
+    public bool Enabled { get; set; } = false;
+
+    /// <summary>Role applied to unauthenticated requests. Empty = deny (401).</summary>
+    public string DefaultRole { get; set; } = "";
+
+    /// <summary>Role required to use the API key management endpoints.</summary>
+    public string AdminRole { get; set; } = "admin";
+
+    public ApiKeyAuthConfig ApiKey { get; set; } = new();
+
+    public JwtAuthConfig Jwt { get; set; } = new();
+}
+
+public sealed class ApiKeyAuthConfig
+{
+    public bool Enabled { get; set; } = false;
+
+    public string Header { get; set; } = "X-API-Key";
+}
+
+public sealed class JwtAuthConfig
+{
+    public bool Enabled { get; set; } = false;
+
+    public string Authority { get; set; } = "";
+
+    public string Audience { get; set; } = "";
+
+    /// <summary>Claim type whose values are role names.</summary>
+    public string RoleClaim { get; set; } = "roles";
 }
 
 public sealed class DatabaseConfig

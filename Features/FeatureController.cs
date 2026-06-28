@@ -1,4 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
+using PgDataHub.Auth;
+using PgDataHub.Config;
+using PgDataHub.Metadata;
 
 namespace PgDataHub.Features;
 
@@ -8,13 +11,42 @@ public sealed class FeatureController : ControllerBase
 {
     private readonly FeatureService _featureService;
     private readonly FeatureQueryBuilder _queryBuilder;
+    private readonly AuthService _auth;
+    private readonly PgDataHubConfig _config;
 
     public FeatureController(
         FeatureService featureService,
-        FeatureQueryBuilder queryBuilder)
+        FeatureQueryBuilder queryBuilder,
+        AuthService auth,
+        PgDataHubConfig config)
     {
         _featureService = featureService;
         _queryBuilder = queryBuilder;
+        _auth = auth;
+        _config = config;
+    }
+
+    /// <summary>
+    /// Enforce collection access for the caller and return a column-narrowed
+    /// view of the collection. <c>collection</c> is set to null and a 403 result
+    /// is returned via <c>forbidden</c> when access is denied.
+    /// </summary>
+    private async Task<(CollectionMetadata? collection, IActionResult? forbidden)>
+        AuthorizeCollectionAsync(CollectionMetadata collection, CancellationToken ct)
+    {
+        if (!_config.Auth.Enabled)
+            return (collection, null);
+
+        var roles = User.RoleNames();
+
+        if (!await _auth.CanAccessCollectionAsync(roles, collection.Schema, collection.Name, ct))
+        {
+            return (null, StatusCode(
+                StatusCodes.Status403Forbidden,
+                new { error = "Forbidden", collectionId = $"{collection.Schema}.{collection.Name}" }));
+        }
+
+        return (await _auth.ApplyColumnRulesAsync(roles, collection, ct), null);
     }
 
     [HttpGet("{collectionId}/items")]
@@ -28,6 +60,10 @@ public sealed class FeatureController : ControllerBase
         {
             return NotFound(new { error = "Collection not found", collectionId });
         }
+
+        var (authorized, forbidden) = await AuthorizeCollectionAsync(collection, cancellationToken);
+        if (forbidden is not null) return forbidden;
+        collection = authorized!;
 
         var queryDict = Request.Query.ToDictionary(kv => kv.Key, kv => kv.Value.ToString());
 
@@ -84,6 +120,10 @@ public sealed class FeatureController : ControllerBase
         {
             return NotFound(new { error = "Collection not found", collectionId });
         }
+
+        var (authorized, forbidden) = await AuthorizeCollectionAsync(collection, cancellationToken);
+        if (forbidden is not null) return forbidden;
+        collection = authorized!;
 
         var properties = new Dictionary<string, object>();
 
@@ -161,19 +201,29 @@ public sealed class FeatureController : ControllerBase
     string id,
     CancellationToken ct)
     {
-        var result =
-            await _featureService.GetFeatureByIdAsync(
-                collectionId,
-                id,
-                ct);
+        var collection = await _featureService.GetCollectionAsync(collectionId, ct);
 
-        if (result is null)
+        if (collection is null)
         {
             return NotFound(new
             {
                 error = "Collection not found",
                 collectionId
             });
+        }
+
+        var (authorized, forbidden) = await AuthorizeCollectionAsync(collection, ct);
+        if (forbidden is not null) return forbidden;
+        collection = authorized!;
+
+        FeatureResult result;
+        try
+        {
+            result = await _featureService.GetFeatureByIdAsync(collection, id, ct);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
         }
 
         await using (result)

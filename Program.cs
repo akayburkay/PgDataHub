@@ -1,5 +1,9 @@
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.ResponseCompression;
 using Npgsql;
+using PgDataHub.Auth;
 using PgDataHub.Config;
 using PgDataHub.Features;
 using PgDataHub.Functions;
@@ -24,7 +28,60 @@ builder.Services.AddSingleton<FeatureQueryBuilder>();
 
 builder.Services.AddScoped<FeatureService>();
 builder.Services.AddScoped<FunctionService>();
-builder.Services.AddHostedService<MetadataListenerService>(); builder.Services.AddControllers();
+builder.Services.AddHostedService<MetadataListenerService>();
+
+builder.Services.AddSingleton<AuthService>();
+
+if (config.Auth.Enabled)
+{
+    var authn = builder.Services.AddAuthentication("PgDataHub");
+
+    var jwtEnabled = config.Auth.Jwt.Enabled;
+    var apiKeyEnabled = config.Auth.ApiKey.Enabled;
+
+    // Choose scheme per request: Bearer token -> JWT, otherwise -> API key.
+    // Never forward to a scheme that isn't registered.
+    authn.AddPolicyScheme("PgDataHub", displayName: null, options =>
+    {
+        options.ForwardDefaultSelector = ctx =>
+        {
+            var isBearer = ctx.Request.Headers.Authorization.ToString()
+                .StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase);
+
+            if (isBearer && jwtEnabled)
+                return JwtBearerDefaults.AuthenticationScheme;
+            if (apiKeyEnabled)
+                return ApiKeyAuthenticationHandler.SchemeName;
+
+            return jwtEnabled
+                ? JwtBearerDefaults.AuthenticationScheme
+                : ApiKeyAuthenticationHandler.SchemeName;
+        };
+    });
+
+    if (config.Auth.ApiKey.Enabled)
+    {
+        authn.AddScheme<AuthenticationSchemeOptions, ApiKeyAuthenticationHandler>(
+            ApiKeyAuthenticationHandler.SchemeName, configureOptions: null);
+    }
+
+    if (config.Auth.Jwt.Enabled)
+    {
+        authn.AddJwtBearer(options =>
+        {
+            options.Authority = config.Auth.Jwt.Authority;
+            options.Audience = config.Auth.Jwt.Audience;
+            options.TokenValidationParameters.RoleClaimType = config.Auth.Jwt.RoleClaim;
+        });
+    }
+
+    builder.Services.AddAuthorization(options =>
+        options.FallbackPolicy = new AuthorizationPolicyBuilder()
+            .RequireAuthenticatedUser()
+            .Build());
+}
+
+builder.Services.AddControllers();
 
 builder.Services.AddResponseCompression(options =>
 {
@@ -62,6 +119,18 @@ if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
+}
+
+// Serve the bundled admin UI from wwwroot (e.g. /admin/). Static files are not
+// subject to the authorization fallback policy; the page itself holds no data and
+// its API calls require an admin key.
+app.UseDefaultFiles();
+app.UseStaticFiles();
+
+if (config.Auth.Enabled)
+{
+    app.UseAuthentication();
+    app.UseAuthorization();
 }
 
 app.MapControllers();
