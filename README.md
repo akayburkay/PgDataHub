@@ -10,6 +10,7 @@ A lightweight .NET 10 web server that instantly exposes PostgreSQL tables, views
 - **Rich filtering** — equality, comparison, `in`, `between`, `like`, `ilike`, `null` checks
 - **Pagination** — `limit` / `offset` with configurable defaults and hard caps
 - **Live metadata** — schema changes picked up instantly via PostgreSQL `LISTEN/NOTIFY`
+- **Auth (optional)** — API key + JWT authentication, role-based collection/function/column scoping, all stored in `pgdatahub.ini` and managed from a built-in `/admin` UI
 - **Response compression** — Brotli / Gzip for JSON and GeoJSON responses
 - **Swagger UI** — available at `/swagger` in development
 

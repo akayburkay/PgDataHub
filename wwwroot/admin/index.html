@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PgDataHub — Auth Admin</title>
+<style>
+  :root { --bg:#0f172a; --panel:#1e293b; --line:#334155; --fg:#e2e8f0; --muted:#94a3b8;
+          --accent:#38bdf8; --danger:#f87171; --ok:#4ade80; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.5 system-ui,sans-serif; background:var(--bg); color:var(--fg); }
+  header { padding:16px 24px; border-bottom:1px solid var(--line); }
+  h1 { margin:0; font-size:18px; }
+  main { padding:24px; max-width:1100px; margin:0 auto; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end; }
+  label { display:block; font-size:12px; color:var(--muted); margin-bottom:2px; }
+  input, select, textarea, button { font:inherit; }
+  input, select, textarea {
+    background:var(--bg); color:var(--fg); border:1px solid var(--line);
+    border-radius:6px; padding:7px 9px; }
+  textarea { width:100%; min-height:64px; font-family:ui-monospace,monospace; }
+  button { background:var(--accent); color:#06283d; border:0; border-radius:6px;
+           padding:8px 14px; font-weight:600; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--fg); border:1px solid var(--line); }
+  button.danger { background:var(--danger); color:#3b0a0a; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+           padding:16px; margin-bottom:20px; }
+  .tabs { display:flex; gap:8px; margin-bottom:16px; }
+  .tabs button { background:transparent; color:var(--muted); border:1px solid var(--line); }
+  .tabs button.active { background:var(--accent); color:#06283d; }
+  table { width:100%; border-collapse:collapse; }
+  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; font-size:12px; }
+  code { font-family:ui-monospace,monospace; }
+  .msg { padding:8px 12px; border-radius:6px; margin:10px 0; display:none; }
+  .msg.err { background:#451a1a; color:#fecaca; display:block; }
+  .msg.ok  { background:#16351f; color:#bbf7d0; display:block; }
+  .hidden { display:none; }
+  dialog { background:var(--panel); color:var(--fg); border:1px solid var(--line);
+           border-radius:10px; padding:20px; max-width:520px; }
+  dialog::backdrop { background:rgba(0,0,0,.6); }
+  .key-pill { background:var(--bg); border:1px solid var(--line); padding:10px;
+              border-radius:6px; word-break:break-all; }
+  small.hint { color:var(--muted); }
+</style>
+</head>
+<body>
+<header><h1>PgDataHub — Auth Admin</h1></header>
+<main>
+  <div class="panel">
+    <div class="row">
+      <div><label>API key header</label><input id="hdr" value="X-API-Key" size="14" /></div>
+      <div style="flex:1"><label>Admin API key</label>
+        <input id="adminKey" type="password" style="width:100%" placeholder="paste an admin key" /></div>
+      <button id="saveCreds">Save</button>
+    </div>
+    <small class="hint">Stored in this browser tab only (sessionStorage). Sent on every request.</small>
+  </div>
+
+  <div id="msg" class="msg"></div>
+
+  <div class="tabs">
+    <button data-tab="keys" class="active">API Keys</button>
+    <button data-tab="roles">Roles</button>
+  </div>
+
+  <!-- KEYS -->
+  <section id="tab-keys">
+    <div class="panel">
+      <h3 style="margin-top:0">Create API key</h3>
+      <div class="row">
+        <div><label>Name</label><input id="k_name" /></div>
+        <div><label>Owner</label><input id="k_owner" /></div>
+        <div><label>Description</label><input id="k_desc" /></div>
+        <div><label>Role</label><select id="k_role"></select></div>
+        <div><label>Expires (optional, ISO)</label><input id="k_exp" placeholder="2027-01-01T00:00:00Z" /></div>
+        <button id="k_create">Create</button>
+      </div>
+    </div>
+    <div class="panel">
+      <table>
+        <thead><tr><th>Id</th><th>Name</th><th>Owner</th><th>Role</th><th>Enabled</th>
+          <th>Expires</th><th>Last used</th><th></th></tr></thead>
+        <tbody id="keysBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ROLES -->
+  <section id="tab-roles" class="hidden">
+    <div class="panel">
+      <h3 style="margin-top:0">Create / edit role</h3>
+      <div class="row">
+        <div><label>Name</label><input id="r_name" /></div>
+        <div style="flex:1"><label>Description</label><input id="r_desc" style="width:100%" /></div>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <div style="flex:1"><label>Collections — allow (comma globs)</label>
+          <input id="r_callow" style="width:100%" placeholder="*, public.cities, public.roads*" /></div>
+        <div style="flex:1"><label>Collections — deny</label>
+          <input id="r_cdeny" style="width:100%" /></div>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <div style="flex:1"><label>Functions — allow</label><input id="r_fallow" style="width:100%" /></div>
+        <div style="flex:1"><label>Functions — deny</label><input id="r_fdeny" style="width:100%" /></div>
+      </div>
+      <div style="margin-top:10px">
+        <label>Column rules (JSON: [{"pattern":"public.cities","hide":["population"],"allow":[]}])</label>
+        <textarea id="r_cols">[]</textarea>
+      </div>
+      <div style="margin-top:10px"><button id="r_save">Save role</button>
+        <button id="r_clear" class="ghost">Clear form</button></div>
+    </div>
+    <div class="panel">
+      <table>
+        <thead><tr><th>Name</th><th>Description</th><th>Collections</th><th>Functions</th><th></th></tr></thead>
+        <tbody id="rolesBody"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<dialog id="keyDialog">
+  <h3 style="margin-top:0">API key created</h3>
+  <p>Copy it now — it is shown only once.</p>
+  <div class="key-pill"><code id="rawKey"></code></div>
+  <div style="margin-top:16px;text-align:right"><button id="keyDialogClose">Done</button></div>
+</dialog>
+
+<script>
+const $ = s => document.querySelector(s);
+const enc = encodeURIComponent;
+let HDR = sessionStorage.getItem('pgdh_hdr') || 'X-API-Key';
+let KEY = sessionStorage.getItem('pgdh_key') || '';
+$('#hdr').value = HDR; $('#adminKey').value = KEY;
+
+function msg(text, ok) {
+  const m = $('#msg'); m.textContent = text; m.className = 'msg ' + (ok ? 'ok' : 'err');
+  if (ok) setTimeout(() => { m.className = 'msg'; }, 2500);
+}
+function headers(json) {
+  const h = {}; if (KEY) h[HDR] = KEY; if (json) h['Content-Type'] = 'application/json'; return h;
+}
+async function api(method, url, body) {
+  const res = await fetch(url, { method, headers: headers(!!body), body: body ? JSON.stringify(body) : undefined });
+  if (res.status === 204) return null;
+  const text = await res.text();
+  const data = text ? JSON.parse(text) : null;
+  if (!res.ok) throw new Error((data && data.error) || (res.status + ' ' + res.statusText));
+  return data;
+}
+const list = v => (v || '').split(',').map(s => s.trim()).filter(Boolean);
+
+$('#saveCreds').onclick = () => {
+  HDR = $('#hdr').value.trim() || 'X-API-Key'; KEY = $('#adminKey').value.trim();
+  sessionStorage.setItem('pgdh_hdr', HDR); sessionStorage.setItem('pgdh_key', KEY);
+  msg('Saved.', true); refresh();
+};
+
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.tabs button').forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+  $('#tab-keys').classList.toggle('hidden', b.dataset.tab !== 'keys');
+  $('#tab-roles').classList.toggle('hidden', b.dataset.tab !== 'roles');
+});
+
+// ---- Keys ----
+async function loadKeys() {
+  const keys = await api('GET', '/auth/apikeys');
+  $('#keysBody').innerHTML = keys.map(k => `
+    <tr><td>${k.id}</td><td>${esc(k.name)}</td><td>${esc(k.owner || '')}</td>
+    <td>${esc(k.roleName)}</td><td>${k.enabled ? 'yes' : 'no'}</td>
+    <td>${k.expiresAt || ''}</td><td>${k.lastUsedAt || ''}</td>
+    <td><button class="danger" data-del="${k.id}">Delete</button></td></tr>`).join('');
+  $('#keysBody').querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
+    if (!confirm('Delete key #' + b.dataset.del + '?')) return;
+    try { await api('DELETE', '/auth/apikeys/' + b.dataset.del); msg('Deleted.', true); loadKeys(); }
+    catch (e) { msg(e.message); }
+  });
+}
+$('#k_create').onclick = async () => {
+  try {
+    const r = await api('POST', '/auth/apikeys', {
+      name: $('#k_name').value, owner: $('#k_owner').value, description: $('#k_desc').value,
+      roleName: $('#k_role').value, expiresAt: $('#k_exp').value || null });
+    $('#rawKey').textContent = r.apiKey; $('#keyDialog').showModal();
+    $('#k_name').value = $('#k_owner').value = $('#k_desc').value = $('#k_exp').value = '';
+    loadKeys();
+  } catch (e) { msg(e.message); }
+};
+$('#keyDialogClose').onclick = () => $('#keyDialog').close();
+
+// ---- Roles ----
+async function loadRoles() {
+  const roles = await api('GET', '/auth/roles');
+  const sel = $('#k_role'); sel.innerHTML = roles.map(r => `<option>${esc(r.name)}</option>`).join('');
+  $('#rolesBody').innerHTML = roles.map(r => `
+    <tr><td><code>${esc(r.name)}</code></td><td>${esc(r.description || '')}</td>
+    <td>${esc((r.collectionsAllow || []).join(', '))}</td>
+    <td>${esc((r.functionsAllow || []).join(', '))}</td>
+    <td><button class="ghost" data-edit='${esc(JSON.stringify(r))}'>Edit</button>
+        <button class="danger" data-delr="${esc(r.name)}">Delete</button></td></tr>`).join('');
+  $('#rolesBody').querySelectorAll('[data-edit]').forEach(b => b.onclick = () => fillRole(JSON.parse(b.dataset.edit)));
+  $('#rolesBody').querySelectorAll('[data-delr]').forEach(b => b.onclick = async () => {
+    if (!confirm('Delete role ' + b.dataset.delr + '?')) return;
+    try { await api('DELETE', '/auth/roles/' + enc(b.dataset.delr)); msg('Deleted.', true); loadRoles(); }
+    catch (e) { msg(e.message); }
+  });
+}
+function fillRole(r) {
+  $('#r_name').value = r.name; $('#r_desc').value = r.description || '';
+  $('#r_callow').value = (r.collectionsAllow || []).join(', ');
+  $('#r_cdeny').value = (r.collectionsDeny || []).join(', ');
+  $('#r_fallow').value = (r.functionsAllow || []).join(', ');
+  $('#r_fdeny').value = (r.functionsDeny || []).join(', ');
+  $('#r_cols').value = JSON.stringify(r.columnRules || [], null, 0);
+}
+$('#r_clear').onclick = () => fillRole({ name:'', columnRules:[] });
+$('#r_save').onclick = async () => {
+  const name = $('#r_name').value.trim();
+  if (!name) return msg('Role name required.');
+  let cols;
+  try { cols = JSON.parse($('#r_cols').value || '[]'); }
+  catch { return msg('Column rules: invalid JSON.'); }
+  try {
+    await api('PUT', '/auth/roles/' + enc(name), {
+      description: $('#r_desc').value,
+      collectionsAllow: list($('#r_callow').value), collectionsDeny: list($('#r_cdeny').value),
+      functionsAllow: list($('#r_fallow').value), functionsDeny: list($('#r_fdeny').value),
+      columnRules: cols });
+    msg('Saved.', true); loadRoles();
+  } catch (e) { msg(e.message); }
+};
+
+function esc(s) { return String(s).replace(/[&<>"']/g, c =>
+  ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
+
+async function refresh() {
+  if (!KEY) { msg('Enter an admin API key to begin.'); return; }
+  try { await loadRoles(); await loadKeys(); } catch (e) { msg(e.message); }
+}
+refresh();
+</script>
+</body>
+</html>

@@ -13,11 +13,21 @@ internal static class CollectionOverrideApplier
         CollectionMetadata source,
         CollectionConfig? overrideConfig,
         ILogger logger)
-    {
-        var allow = overrideConfig?.Feature.Allow ?? [];
-        var hide = overrideConfig?.Feature.Hide ?? [];
+        => Apply(
+            source,
+            overrideConfig?.Feature.Allow ?? [],
+            overrideConfig?.Feature.Hide ?? [],
+            validateColumns: overrideConfig is not null,
+            logger);
 
-        if (overrideConfig is not null)
+    internal static CollectionMetadata Apply(
+        CollectionMetadata source,
+        IReadOnlyList<string> allow,
+        IReadOnlyList<string> hide,
+        bool validateColumns,
+        ILogger logger)
+    {
+        if (validateColumns)
         {
             var actual = new HashSet<string>(
                 source.Columns.Select(c => c.Name),
@@ -239,11 +249,7 @@ public sealed class MetadataService
     }
 
     private static bool Match(string value, string pattern)
-        => pattern == "*"
-            ? true
-            : pattern.EndsWith('*')
-                ? value.StartsWith(pattern[..^1], StringComparison.OrdinalIgnoreCase)
-                : string.Equals(value, pattern, StringComparison.OrdinalIgnoreCase);
+        => Glob.Match(value, pattern);
 
 
     private CollectionMetadata ApplySecurityFilter(CollectionMetadata raw)

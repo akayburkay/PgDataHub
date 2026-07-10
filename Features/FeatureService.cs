@@ -159,10 +159,19 @@ public sealed class FeatureService
         if (collection is null)
             return null;
 
+        return await GetFeatureByIdAsync(collection, id, ct);
+    }
+
+    public async Task<FeatureResult>
+    GetFeatureByIdAsync(
+        CollectionMetadata collection,
+        string id,
+        CancellationToken ct = default)
+    {
         if (string.IsNullOrEmpty(collection.PrimaryKey))
         {
             throw new InvalidOperationException(
-                $"Collection '{collectionId}' does not support Feature By Id.");
+                $"Collection '{collection.Schema}.{collection.Name}' does not support Feature By Id.");
         }
 
         var query =

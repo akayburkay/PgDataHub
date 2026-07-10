@@ -6,6 +6,7 @@
 - [API Reference](#api-reference)
 - [Query Parameters](#query-parameters)
 - [Filtering](#filtering)
+- [Authentication & Authorization](#authentication--authorization)
 - [Architecture](#architecture)
 
 ---
@@ -228,6 +229,112 @@ GET /collections/public.orders/items?deleted_at=null&orderby=-created_at&count=t
 
 ---
 
+## Authentication & Authorization
+
+Auth is **off by default**. When enabled, every endpoint requires a valid credential
+and access is scoped by role. **All auth data — roles, permissions and API keys — is
+stored in `pgdatahub.ini`** (the `[role.*]` and `[apikey.*]` sections) and managed from
+the bundled `/admin` web UI. No database tables are involved.
+
+### Configuration
+
+```ini
+[auth]
+enabled=true
+defaultRole=            # role for requests with no credentials; empty = 401
+adminRole=admin         # role required for the /admin UI and /auth/* endpoints
+
+[auth.apikey]
+enabled=true
+header=X-API-Key
+
+[auth.jwt]
+enabled=true
+authority=https://idp.example.com/realms/main
+audience=pgdatahub
+roleClaim=roles         # JWT claim whose values are role names
+```
+
+A request is authenticated as **JWT** when it carries `Authorization: Bearer <token>`,
+otherwise the configured **API key header** is used. JWT role claim values map directly
+to role names.
+
+### Data in the INI
+
+**Roles** — one `[role.<name>]` section each:
+
+```ini
+[role.readonly]
+description=Public cities only
+collections.allow=public.cities, public.roads*
+collections.deny=public.secret
+functions.allow=
+columns.public.cities.hide=population
+columns.public.cities.allow=
+```
+
+| Key | Meaning |
+|---|---|
+| `collections.allow` / `functions.allow` | Glob whitelist over `schema.name` (`*`, `public.*`, `public.cities`) |
+| `collections.deny` / `functions.deny` | Glob blacklist; **deny wins** over allow |
+| `columns.<pattern>.allow` | Column whitelist for that collection pattern (empty = all) |
+| `columns.<pattern>.hide` | Columns to drop from responses |
+
+**API keys** — one `[apikey.<id>]` section each; only the SHA-256 **hash** is stored:
+
+```ini
+[apikey.1]
+name=admin key
+owner=ops
+description=
+hash=6aa3a725…            ; encode(sha256('raw-key'), 'hex')
+role=admin
+enabled=true
+expires=
+lastUsed=
+```
+
+`lastUsed` is updated (throttled to once per minute per key) on each successful request.
+
+**Decision rules:**
+- Access is granted if any matching `allow` exists and no matching `deny` does.
+- Column rules merge across the caller's roles: union of allows, intersection of hides
+  (most permissive), then layered on top of per-table `[schema.table.feature]` overrides.
+- `/metadata` and `/functions` only list resources the caller may see; hidden columns are
+  stripped from `/metadata`, `/queryables`, `/items` and `/items/{id}`.
+
+### Admin UI
+
+Open **`/admin/`** in a browser, paste an admin API key, and manage roles and keys:
+
+- **API Keys** — list, create (raw key shown **once**), delete.
+- **Roles** — list, create/edit (allow/deny globs + column rules), delete.
+
+Every change is written straight back to `pgdatahub.ini` and applied immediately (no
+restart). The page itself is unauthenticated (it holds no data); its calls require the
+admin role. The same operations are available as a REST API:
+
+| Endpoint | Description |
+|---|---|
+| `GET/POST /auth/apikeys`, `DELETE /auth/apikeys/{id}` | Manage keys (create returns the raw key once) |
+| `GET /auth/roles`, `PUT /auth/roles/{name}`, `DELETE /auth/roles/{name}` | Manage roles (delete is `409` if a key still uses the role) |
+
+An unknown `roleName` when creating a key returns `400`.
+
+### Responses
+
+| Situation | Status |
+|---|---|
+| Missing/invalid credential (and no `defaultRole`) | `401 Unauthorized` |
+| Authenticated but not permitted for the resource | `403 Forbidden` |
+
+```http
+GET /collections/public.cities/items
+X-API-Key: my-raw-key
+```
+
+---
+
 ## Architecture
 
 ```
@@ -235,8 +342,12 @@ PgDataHub/
 ├── Program.cs                      # DI setup, middleware pipeline
 ├── pgdatahub.ini                   # Configuration file
 │
+├── wwwroot/admin/index.html        # Bundled auth admin UI (served at /admin/)
+│
 ├── Config/
-│   ├── PgDataHubConfig.cs          # INI parser and all config models
+│   ├── PgDataHubConfig.cs          # INI parser and all config models (incl. auth data)
+│   ├── IniAuthWriter.cs            # Writes [role.*]/[apikey.*] back into the INI
+│   ├── Glob.cs                     # Shared glob matcher
 │   └── Db.cs                       # NpgsqlDataSource singleton (connection pool)
 │
 ├── Metadata/
@@ -252,9 +363,18 @@ PgDataHub/
 │   ├── JsonWriter.cs               # Streams NpgsqlDataReader → GeoJSON/JSON
 │   └── FeatureController.cs        # GET /collections/...
 │
-└── Functions/
-    ├── FunctionService.cs          # Function execution and JSON/GeoJSON output
-    └── FunctionController.cs       # GET /functions/...
+├── Functions/
+│   ├── FunctionService.cs          # Function execution and JSON/GeoJSON output
+│   └── FunctionController.cs       # GET /functions/...
+│
+└── Auth/
+    ├── AuthModels.cs                   # Principal, RolePermission, ApiKeyRecord, DTOs
+    ├── AuthService.cs                  # In-memory auth cache (from INI) + access decisions
+    ├── ApiKeyAuthenticationHandler.cs  # API key authentication scheme
+    ├── AccessControl.cs                # Role claim type + ClaimsPrincipal helpers
+    ├── AdminControllerBase.cs          # Shared admin-role guard
+    ├── AuthController.cs               # /auth/apikeys management
+    └── RolesController.cs              # /auth/roles management
 ```
 
 ### Key Design Decisions
@@ -266,3 +386,5 @@ PgDataHub/
 **Streaming JSON** — Large result sets are written directly to the HTTP response stream via `Utf8JsonWriter` without buffering the full result in memory.
 
 **Response compression** — Brotli (preferred) and Gzip are automatically applied to `application/json` and `application/geo+json` responses.
+
+**Auth in the INI** — Roles, permissions and API keys live in `pgdatahub.ini` and are held in an in-memory cache rebuilt on every management change; the `/admin` UI writes edits straight back to the file (`IniAuthWriter` preserves all other sections and comments). API keys are matched by SHA-256 hash for O(1) lookup; the raw key is never stored. Authentication runs as standard ASP.NET Core schemes (a policy scheme forwards to JWT or API key per request), so authorization reuses `HttpContext.User`.
