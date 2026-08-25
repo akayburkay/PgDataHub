@@ -65,7 +65,7 @@ public sealed class FeatureController : ControllerBase
         if (forbidden is not null) return forbidden;
         collection = authorized!;
 
-        var queryDict = Request.Query.ToDictionary(kv => kv.Key, kv => kv.Value.ToString());
+        var queryDict = Request.Query.ToDictionary(kv => kv.Key, kv => (string?)kv.Value.ToString());
 
         FeatureQueryParameters parameters;
         try

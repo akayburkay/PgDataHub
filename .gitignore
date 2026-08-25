@@ -1,6 +1,7 @@
 # Build
 bin/
 obj/
+.pgdatahub/
 
 # User specific files
 *.user
@@ -26,3 +27,6 @@ Thumbs.db
 
 .claude/
 _scan/
+.security-build*/
+.security-test-bin/
+.security-test-obj/

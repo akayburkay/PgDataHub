@@ -1,15 +1,16 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 using PgDataHub.Config;
 
 namespace PgDataHub.Auth;
 
-[ApiController]
+[ApiController, AllowAnonymous]
 [Route("auth/apikeys")]
 public sealed class AuthController : AdminControllerBase
 {
     private readonly AuthService _auth;
 
-    public AuthController(AuthService auth, PgDataHubConfig config) : base(config)
+    public AuthController(AuthService auth, PgDataHubConfig config, AdminSessionService sessions) : base(config, sessions)
     {
         _auth = auth;
     }
@@ -53,6 +54,15 @@ public sealed class AuthController : AdminControllerBase
         if (AdminGuard() is { } guard) return guard;
 
         return await _auth.RevokeKeyAsync(id, ct)
+            ? NoContent()
+            : NotFound(new { error = "API key not found.", id });
+    }
+
+    [HttpPut("{id:long}")]
+    public async Task<IActionResult> Update(long id, [FromBody] UpdateApiKeyRequest request, CancellationToken ct)
+    {
+        if (AdminGuard() is { } guard) return guard;
+        return await _auth.UpdateKeyAsync(id, request.Enabled, request.ExpiresAt, ct)
             ? NoContent()
             : NotFound(new { error = "API key not found.", id });
     }

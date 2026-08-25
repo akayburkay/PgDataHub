@@ -1,15 +1,16 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 using PgDataHub.Config;
 
 namespace PgDataHub.Auth;
 
-[ApiController]
+[ApiController, AllowAnonymous]
 [Route("auth/roles")]
 public sealed class RolesController : AdminControllerBase
 {
     private readonly AuthService _auth;
 
-    public RolesController(AuthService auth, PgDataHubConfig config) : base(config)
+    public RolesController(AuthService auth, PgDataHubConfig config, AdminSessionService sessions) : base(config, sessions)
     {
         _auth = auth;
     }
@@ -30,8 +31,15 @@ public sealed class RolesController : AdminControllerBase
         if (string.IsNullOrWhiteSpace(name))
             return BadRequest(new { error = "role name is required." });
 
-        await _auth.UpsertRoleAsync(name, request, ct);
-        return NoContent();
+        try
+        {
+            await _auth.UpsertRoleAsync(name, request, ct);
+            return NoContent();
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
     }
 
     [HttpDelete("{name}")]

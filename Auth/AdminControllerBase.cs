@@ -7,8 +7,10 @@ namespace PgDataHub.Auth;
 public abstract class AdminControllerBase : ControllerBase
 {
     private readonly PgDataHubConfig _config;
+    private readonly AdminSessionService _sessions;
 
-    protected AdminControllerBase(PgDataHubConfig config) => _config = config;
+    protected AdminControllerBase(PgDataHubConfig config, AdminSessionService sessions)
+    { _config = config; _sessions = sessions; }
 
     /// <summary>
     /// 404 when auth is off, 403 unless the caller has the admin role. Returns null
@@ -16,19 +18,9 @@ public abstract class AdminControllerBase : ControllerBase
     /// </summary>
     protected IActionResult? AdminGuard()
     {
-        if (!_config.Auth.Enabled)
-            return NotFound();
-
-        var adminRole = _config.Auth.AdminRole;
-
-        if (!string.IsNullOrWhiteSpace(adminRole)
-            && User.RoleNames().Contains(adminRole, StringComparer.OrdinalIgnoreCase))
-        {
-            return null;
-        }
-
-        return StatusCode(
-            StatusCodes.Status403Forbidden,
-            new { error = "Admin role required." });
+        var mutation = !HttpMethods.IsGet(Request.Method) && !HttpMethods.IsHead(Request.Method);
+        return _sessions.Validate(HttpContext, mutation)
+            ? null
+            : Unauthorized(new { error = mutation ? "Admin session or CSRF token is invalid." : "Admin login required." });
     }
 }

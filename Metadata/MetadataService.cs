@@ -56,7 +56,8 @@ internal static class CollectionOverrideApplier
             {
                 bool visible = mode switch
                 {
-                    FilterMode.Whitelist => allowSet!.Contains(col.Name),
+                    FilterMode.Whitelist => allowSet!.Contains(col.Name) &&
+                                            !hide.Contains(col.Name, StringComparer.OrdinalIgnoreCase),
                     FilterMode.Blacklist => !hideSet!.Contains(col.Name),
                     FilterMode.Passthrough => true,
                     _ => throw new InvalidOperationException($"Unknown FilterMode: {mode}")
@@ -133,15 +134,48 @@ public sealed class MetadataService
     string name,
     CancellationToken ct = default)
     {
-        (await GetCacheAsync(false, ct))
-            .FunctionLookup
-            .TryGetValue(Key(schema, name), out var f);
+        var cache = await GetCacheAsync(false, ct);
+        return cache.FunctionLookup.TryGetValue(Key(schema, name), out var matches) && matches.Count == 1
+            ? matches[0]
+            : null;
+    }
 
-        return f;
+    public async Task<FunctionMetadata?> GetFunctionAsync(uint oid, CancellationToken ct = default)
+    {
+        (await GetCacheAsync(false, ct)).FunctionOidLookup.TryGetValue(oid, out var function);
+        return function;
     }
     public async Task<IReadOnlyList<FunctionMetadata>> GetFunctionsAsync(
     CancellationToken ct = default)
     => (await GetCacheAsync(false, ct)).Functions;
+
+    public async Task<object> GetAdminLookupAsync(CancellationToken ct = default)
+    {
+        var collections = await LoadCollectionsAsync(ct);
+        var functions = await LoadFunctionsAsync(ct);
+        return new
+        {
+            collections = collections.Select(c => new
+            {
+                id = Key(c.Schema, c.Name), c.Schema, c.Name, c.Type,
+                columns = c.Columns.Select(column => column.Name).ToList()
+            }).ToList(),
+            functions = functions.Select(f => new { f.Oid, f.Schema, f.Name, f.Signature }).ToList()
+        };
+    }
+
+    public async Task<object> GetListenerStatusAsync(CancellationToken ct = default)
+    {
+        await using var connection = await Db.OpenConnectionAsync(ct);
+        await using var command = new NpgsqlCommand("""
+            select
+              exists(select 1 from pg_event_trigger where evtname = 'pgdatahub_metadata_trigger'),
+              to_regprocedure('public.pgdatahub_metadata_notify()') is not null
+            """, connection);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        await reader.ReadAsync(ct);
+        return new { triggerInstalled = reader.GetBoolean(0), functionInstalled = reader.GetBoolean(1), channel = "metadata_changed" };
+    }
     public async Task<CollectionMetadata?> GetCollectionAsync(string schema, string table, CancellationToken ct = default)
     {
         (await GetCacheAsync(false, ct)).CollectionLookup.TryGetValue(Key(schema, table), out var c);
@@ -184,14 +218,14 @@ public sealed class MetadataService
         foreach (var function in functions)
         {
             if (functionColumns.TryGetValue(
-                Key(function.Schema, function.Name),
+                function.Oid,
                 out var columns))
             {
                 function.Columns = columns;
             }
 
             if (functionParameters.TryGetValue(
-                Key(function.Schema, function.Name),
+                function.Oid,
                 out var parameters))
             {
                 function.Parameters = parameters;
@@ -203,7 +237,9 @@ public sealed class MetadataService
             Collections = filtered,
             Functions = functions,
             CollectionLookup = filtered.ToDictionary(x => Key(x.Schema, x.Name), StringComparer.OrdinalIgnoreCase),
-            FunctionLookup = functions.ToDictionary(x => Key(x.Schema, x.Name), StringComparer.OrdinalIgnoreCase)   
+            FunctionLookup = functions.GroupBy(x => Key(x.Schema, x.Name), StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => (IReadOnlyList<FunctionMetadata>)g.ToList(), StringComparer.OrdinalIgnoreCase),
+            FunctionOidLookup = functions.ToDictionary(x => x.Oid)
         };
     }
 
@@ -222,13 +258,10 @@ public sealed class MetadataService
 
     private bool IsFunctionAllowed(FunctionMetadata f)
     {
-        var fullName = $"{f.Schema}.{f.Name}()";
+        var fullName = $"{f.Schema}.{f.Name}";
 
         if (_config.Function.Exclude.Any(x =>
-            string.Equals(
-                x,
-                fullName,
-                StringComparison.OrdinalIgnoreCase)))
+            Match(fullName, x) || Match(f.Signature, x)))
         {
             _logger.LogDebug(
                 "[Metadata] Function excluded: {Function}",
@@ -245,7 +278,7 @@ public sealed class MetadataService
         }
 
         return include.Any(pattern =>
-            Match(f.Name, pattern));
+            Match(f.Name, pattern) || Match(fullName, pattern) || Match(f.Signature, pattern));
     }
 
     private static bool Match(string value, string pattern)
@@ -314,17 +347,19 @@ public sealed class MetadataService
         {
             list.Add(new FunctionMetadata
             {
-                Schema = r.GetString(0),
-                Name = r.GetString(1),
-                ReturnType = Enum.Parse<FunctionReturnType>(r.GetString(2), true),
-                Description = r.IsDBNull(3) ? "" : r.GetString(3)
+                Oid = r.GetFieldValue<uint>(0),
+                Schema = r.GetString(1),
+                Name = r.GetString(2),
+                Signature = r.GetString(3),
+                ReturnType = Enum.Parse<FunctionReturnType>(r.GetString(4), true),
+                Description = r.IsDBNull(5) ? "" : r.GetString(5)
             });
         }
 
         return list;
     }
 
-    private async Task<Dictionary<string, List<FunctionColumnMetadata>>>
+    private async Task<Dictionary<uint, List<FunctionColumnMetadata>>>
     LoadFunctionColumnsAsync(
         CancellationToken ct)
     {
@@ -338,14 +373,11 @@ public sealed class MetadataService
             await cmd.ExecuteReaderAsync(ct);
 
         var lookup =
-            new Dictionary<string, List<FunctionColumnMetadata>>(
-                StringComparer.OrdinalIgnoreCase);
+            new Dictionary<uint, List<FunctionColumnMetadata>>();
 
         while (await r.ReadAsync(ct))
         {
-            var key = Key(
-                r.GetString(0),
-                r.GetString(1));
+            var key = r.GetFieldValue<uint>(0);
 
             if (!lookup.TryGetValue(key, out var columns))
             {
@@ -355,15 +387,15 @@ public sealed class MetadataService
 
             columns.Add(new FunctionColumnMetadata
             {
-                Name = r.GetString(2),
-                Type = r.GetString(3)
+                Name = r.GetString(3),
+                Type = r.GetString(4)
             });
         }
 
         return lookup;
     }
 
-    private async Task<Dictionary<string, List<FunctionParameterMetadata>>>
+    private async Task<Dictionary<uint, List<FunctionParameterMetadata>>>
     LoadFunctionParametersAsync(
         CancellationToken ct)
     {
@@ -376,14 +408,11 @@ public sealed class MetadataService
         await using var r = await cmd.ExecuteReaderAsync(ct);
 
         var lookup =
-            new Dictionary<string, List<FunctionParameterMetadata>>(
-                StringComparer.OrdinalIgnoreCase);
+            new Dictionary<uint, List<FunctionParameterMetadata>>();
 
         while (await r.ReadAsync(ct))
         {
-            var key = Key(
-                r.GetString(0),
-                r.GetString(1));
+            var key = r.GetFieldValue<uint>(0);
 
             if (!lookup.TryGetValue(key, out var parameters))
             {
@@ -393,8 +422,8 @@ public sealed class MetadataService
 
             parameters.Add(new FunctionParameterMetadata
             {
-                Name = r.GetString(2),
-                Type = r.GetString(3)
+                Name = r.GetString(3),
+                Type = r.GetString(4)
             });
         }
 
@@ -414,7 +443,10 @@ public sealed class MetadataService
         public IReadOnlyDictionary<string, CollectionMetadata> CollectionLookup { get; init; }
             = new Dictionary<string, CollectionMetadata>(StringComparer.OrdinalIgnoreCase);
 
-        public IReadOnlyDictionary<string, FunctionMetadata> FunctionLookup { get; init; }
-            = new Dictionary<string, FunctionMetadata>(StringComparer.OrdinalIgnoreCase);
+        public IReadOnlyDictionary<string, IReadOnlyList<FunctionMetadata>> FunctionLookup { get; init; }
+            = new Dictionary<string, IReadOnlyList<FunctionMetadata>>(StringComparer.OrdinalIgnoreCase);
+
+        public IReadOnlyDictionary<uint, FunctionMetadata> FunctionOidLookup { get; init; }
+            = new Dictionary<uint, FunctionMetadata>();
     }
 }

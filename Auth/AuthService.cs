@@ -17,7 +17,7 @@ public sealed class AuthService
 
     private readonly PgDataHubConfig _config;
     private readonly ILogger<AuthService> _logger;
-    private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly SemaphoreSlim _gate = ConfigMutationCoordinator.Gate;
     private readonly ConcurrentDictionary<string, DateTimeOffset> _lastFlushed = new();
     private volatile AuthCache _cache;
 
@@ -60,33 +60,34 @@ public sealed class AuthService
 
     /// <summary>
     /// Effective column visibility for a principal on a collection, merged across
-    /// all matching allow-permissions: union of allow-lists, intersection of hides
-    /// (most-permissive). Empty/empty = all columns visible.
+    /// all matching allow-permissions: union of allow-lists and hides. A hidden
+    /// column stays hidden when any matching rule hides it.
     /// </summary>
     public Task<ColumnRules> ResolveColumnRulesAsync(
         IReadOnlyList<string> roles, string schema, string name, CancellationToken ct = default)
     {
         var full = Full(schema, name);
 
-        var matching = _cache.Permissions
-            .Where(p => p.ResourceType == ResourceType.Collection
-                        && p.Effect == PermissionEffect.Allow
-                        && roles.Contains(p.RoleName, StringComparer.OrdinalIgnoreCase)
-                        && Glob.Match(full, p.Pattern))
+        var matching = _config.Roles
+            .Where(role => roles.Contains(role.Name, StringComparer.OrdinalIgnoreCase) &&
+                           role.CollectionsAllow.Any(pattern => Glob.Match(full, pattern)))
+            .SelectMany(role => role.ColumnRules)
+            .Where(rule => Glob.Match(full, rule.Key))
+            .Select(rule => rule.Value)
             .ToList();
 
         if (matching.Count == 0)
             return Task.FromResult(new ColumnRules([], []));
 
-        var allow = matching.Any(p => p.ColumnsAllow.Count == 0)
+        var allow = matching.Any(p => p.Allow.Count == 0)
             ? Array.Empty<string>()
-            : matching.SelectMany(p => p.ColumnsAllow)
+            : matching.SelectMany(p => p.Allow)
                       .Distinct(StringComparer.OrdinalIgnoreCase)
                       .ToArray();
 
         IReadOnlyList<string> hide = matching
-            .Select(p => (ISet<string>)new HashSet<string>(p.ColumnsHide, StringComparer.OrdinalIgnoreCase))
-            .Aggregate((acc, next) => { acc.IntersectWith(next); return acc; })
+            .SelectMany(p => p.Hide)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
         return Task.FromResult(new ColumnRules(allow, hide));
@@ -157,6 +158,10 @@ public sealed class AuthService
         string name, string? owner, string? description,
         string roleName, DateTimeOffset? expiresAt, CancellationToken ct = default)
     {
+        ValidateIniValue(name, nameof(name));
+        ValidateIniValue(owner, nameof(owner));
+        ValidateIniValue(description, nameof(description));
+        ValidateRoleName(roleName);
         var rawKey = GenerateRawKey();
 
         await _gate.WaitAsync(ct);
@@ -212,6 +217,16 @@ public sealed class AuthService
 
     public async Task UpsertRoleAsync(string name, RoleUpsertRequest req, CancellationToken ct = default)
     {
+        ValidateRoleName(name);
+        ValidateIniValue(req.Description, nameof(req.Description));
+        foreach (var value in (req.CollectionsAllow ?? []).Concat(req.CollectionsDeny ?? [])
+            .Concat(req.FunctionsAllow ?? []).Concat(req.FunctionsDeny ?? []))
+            ValidateIniValue(value, "permission pattern");
+        foreach (var rule in req.ColumnRules ?? [])
+        {
+            ValidateIniValue(rule.Pattern, "column rule pattern");
+            foreach (var column in rule.Allow.Concat(rule.Hide)) ValidateIniValue(column, "column name");
+        }
         await _gate.WaitAsync(ct);
         try
         {
@@ -363,6 +378,38 @@ public sealed class AuthService
     }
 
     private static bool Eq(string a, string b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+
+    private static void ValidateRoleName(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.Any(c => !(char.IsLetterOrDigit(c) || c is '_' or '-' or '.')))
+            throw new ArgumentException("Role names may contain only letters, numbers, '.', '_' and '-'.");
+    }
+
+    public bool IsAdminKeyHashUsable(string keyHash)
+        => _cache.KeysByHash.TryGetValue(keyHash, out var key) && key.IsUsable &&
+           string.Equals(key.RoleName, _config.Auth.AdminRole, StringComparison.OrdinalIgnoreCase);
+
+    public async Task<bool> UpdateKeyAsync(long id, bool enabled, DateTimeOffset? expiresAt, CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            var key = _config.ApiKeys.FirstOrDefault(k => k.Id == id);
+            if (key is null) return false;
+            key.Enabled = enabled;
+            key.Expires = expiresAt;
+            IniAuthWriter.Save(_config);
+            _cache = BuildCache();
+            return true;
+        }
+        finally { _gate.Release(); }
+    }
+
+    private static void ValidateIniValue(string? value, string name)
+    {
+        if (value?.IndexOfAny(['\r', '\n']) >= 0)
+            throw new ArgumentException($"{name} cannot contain line breaks.");
+    }
 
     private static string Full(string schema, string name) => $"{schema}.{name}";
 

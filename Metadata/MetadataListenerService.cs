@@ -20,51 +20,37 @@ public sealed class MetadataListenerService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        await EnsureTriggerAsync(stoppingToken);
-
-        await using var conn = await Db.OpenConnectionAsync(stoppingToken);
-
-        conn.Notification += (_, e) =>
-        {
-            _logger.LogInformation(
-                "[MetadataListener] PostgreSQL notification received: {Payload}",
-                e.Payload);
-
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    _logger.LogInformation(
-                        "[MetadataListener] Refreshing metadata cache...");
-
-                    await _metadataService.RefreshAsync();
-
-                    _logger.LogInformation(
-                        "[MetadataListener] Metadata cache refreshed.");
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(
-                        ex,
-                        "[MetadataListener] Metadata refresh failed.");
-                }
-            });
-        };
-
-
-        await using (var cmd = new NpgsqlCommand(
-            "LISTEN metadata_changed;", conn))
-        {
-            await cmd.ExecuteNonQueryAsync(stoppingToken);
-        }
-
-        _logger.LogInformation(
-            "[MetadataListener] Listening PostgreSQL metadata changes.");
-
         while (!stoppingToken.IsCancellationRequested)
         {
-            await conn.WaitAsync(stoppingToken);
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, Db.ChangeToken);
+            try
+            {
+                await EnsureTriggerAsync(linked.Token);
+                await using var conn = await Db.OpenConnectionAsync(linked.Token);
+                conn.Notification += (_, e) =>
+                {
+                    _logger.LogInformation("[MetadataListener] PostgreSQL notification received: {Payload}", e.Payload);
+                    _ = RefreshSafelyAsync();
+                };
+                await using (var cmd = new NpgsqlCommand("LISTEN metadata_changed;", conn))
+                    await cmd.ExecuteNonQueryAsync(linked.Token);
+                _logger.LogInformation("[MetadataListener] Listening PostgreSQL metadata changes.");
+                while (!linked.IsCancellationRequested) await conn.WaitAsync(linked.Token);
+            }
+            catch (OperationCanceledException) when (linked.IsCancellationRequested) { }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[MetadataListener] Listener failed; retrying.");
+                try { await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken); }
+                catch (OperationCanceledException) { }
+            }
         }
+    }
+
+    private async Task RefreshSafelyAsync()
+    {
+        try { await _metadataService.RefreshAsync(); }
+        catch (Exception ex) { _logger.LogError(ex, "[MetadataListener] Metadata refresh failed."); }
     }
 
 
@@ -74,7 +60,7 @@ public sealed class MetadataListenerService : BackgroundService
 
 
         var functionSql = """
-            CREATE OR REPLACE FUNCTION pgdatahub_metadata_notify()
+            CREATE OR REPLACE FUNCTION public.pgdatahub_metadata_notify()
             RETURNS event_trigger
             LANGUAGE plpgsql
             AS $$
@@ -114,7 +100,7 @@ public sealed class MetadataListenerService : BackgroundService
             var triggerSql = """
                 CREATE EVENT TRIGGER pgdatahub_metadata_trigger
                 ON ddl_command_end
-                EXECUTE FUNCTION pgdatahub_metadata_notify();
+                EXECUTE FUNCTION public.pgdatahub_metadata_notify();
                 """;
 
             await using var cmd = new NpgsqlCommand(triggerSql, conn);

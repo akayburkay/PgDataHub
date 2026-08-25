@@ -28,6 +28,9 @@ public sealed class FunctionService
         CancellationToken ct)
         => await _metadata.GetFunctionAsync(schema, name, ct);
 
+    public async Task<FunctionMetadata?> GetFunctionAsync(uint oid, CancellationToken ct)
+        => await _metadata.GetFunctionAsync(oid, ct);
+
     public async Task ExecuteAsync(
         string schema,
         string name,
@@ -38,7 +41,30 @@ public sealed class FunctionService
         var function = await _metadata.GetFunctionAsync(schema, name, ct);
 
         if (function is null)
-            throw new KeyNotFoundException("Function not found.");
+            throw new KeyNotFoundException(
+                "Function not found or its name is ambiguous; use the function OID endpoint for overloads.");
+
+        await ExecuteAsync(function, query, response, ct);
+    }
+
+    public async Task ExecuteAsync(
+        uint oid,
+        IQueryCollection query,
+        HttpResponse response,
+        CancellationToken ct)
+    {
+        var function = await _metadata.GetFunctionAsync(oid, ct)
+            ?? throw new KeyNotFoundException("Function not found.");
+
+        await ExecuteAsync(function, query, response, ct);
+    }
+
+    private async Task ExecuteAsync(
+        FunctionMetadata function,
+        IQueryCollection query,
+        HttpResponse response,
+        CancellationToken ct)
+    {
 
         await using var conn = await Db.OpenConnectionAsync(ct);
         await using var cmd = conn.CreateCommand();

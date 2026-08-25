@@ -128,3 +128,9 @@ public sealed class CreatedApiKey
     public required string ApiKey { get; init; }
     public required string RoleName { get; init; }
 }
+
+public sealed class UpdateApiKeyRequest
+{
+    public bool Enabled { get; init; }
+    public DateTimeOffset? ExpiresAt { get; init; }
+}

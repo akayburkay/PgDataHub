@@ -29,6 +29,9 @@ public sealed class ApiKeyAuthenticationHandler
 
     protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
     {
+        if (!_config.Auth.Enabled)
+            return AuthenticateResult.NoResult();
+
         var presented = Request.Headers[_config.Auth.ApiKey.Header].ToString();
 
         if (string.IsNullOrWhiteSpace(presented))
@@ -42,6 +45,9 @@ public sealed class ApiKeyAuthenticationHandler
             return AuthenticateResult.Success(
                 BuildTicket("anonymous", defaultRole, PrincipalSource.Anonymous));
         }
+
+        if (!_config.Auth.ApiKey.Enabled)
+            return AuthenticateResult.NoResult();
 
         var record = await _auth.ResolveApiKeyAsync(presented, Context.RequestAborted);
 

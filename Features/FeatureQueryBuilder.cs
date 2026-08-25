@@ -64,7 +64,6 @@ public sealed class FeatureQuery
 public sealed class FeatureQueryBuilder
 {
     private readonly PgDataHubConfig _config;
-    private const int MaxLimit = 10_000;
 
     public FeatureQueryBuilder(PgDataHubConfig config)
     {
@@ -434,7 +433,8 @@ limit 1
 
         try
         {
-            if (type.Contains("int"))
+            if (type is "smallint" or "integer" or "bigint" or
+                "smallserial" or "serial" or "bigserial")
             {
                 return new NpgsqlParameter(
                     name,
@@ -455,20 +455,20 @@ limit 1
 
             if (type == "real")
             {
+                var value = float.Parse(raw, CultureInfo.InvariantCulture);
+                if (!float.IsFinite(value)) throw new FormatException();
                 return new NpgsqlParameter(
                     name,
-                    float.Parse(
-                        raw,
-                        CultureInfo.InvariantCulture));
+                    value);
             }
 
             if (type == "double precision")
             {
+                var value = double.Parse(raw, CultureInfo.InvariantCulture);
+                if (!double.IsFinite(value)) throw new FormatException();
                 return new NpgsqlParameter(
                     name,
-                    double.Parse(
-                        raw,
-                        CultureInfo.InvariantCulture));
+                    value);
             }
 
             if (type == "boolean")
@@ -488,12 +488,12 @@ limit 1
             }
             if (type == "date")
             {
+                if (!DateTime.TryParseExact(raw, "yyyy-MM-dd", CultureInfo.InvariantCulture,
+                    DateTimeStyles.None, out var date))
+                    throw new FormatException();
                 return new NpgsqlParameter(
                     name,
-                    DateTime.Parse(
-                        raw,
-                        CultureInfo.InvariantCulture,
-                        DateTimeStyles.None).Date);
+                    date.Date);
             }
 
             if (type.Contains("timestamp"))
@@ -507,9 +507,10 @@ limit 1
                         DateTimeStyles.AdjustToUniversal));
             }
         }
-        catch
+        catch (Exception ex) when (ex is FormatException or OverflowException)
         {
-          
+            throw new ArgumentException(
+                $"Invalid value '{raw}' for column '{column.Name}' of type '{column.Type}'.", ex);
         }
 
         return new NpgsqlParameter(
@@ -559,7 +560,11 @@ limit 1
     }
     private int ResolveLimit(int? requested)
     {
-        var defaultLimit = _config.Feature.DefaultLimit;
+        var maxLimit = _config.Feature.MaxLimit;
+        if (maxLimit < 0)
+            throw new InvalidOperationException("Feature.MaxLimit must be >= 0.");
+
+        var defaultLimit = Math.Min(_config.Feature.DefaultLimit, maxLimit);
 
         if (requested is null)
             return defaultLimit;
@@ -567,7 +572,7 @@ limit 1
         if (requested.Value < 0)
             throw new ArgumentException("'limit' must be >= 0.");
 
-        return Math.Min(requested.Value, MaxLimit);
+        return Math.Min(requested.Value, maxLimit);
     }
 }
 
@@ -593,9 +598,22 @@ public static class FeatureQueryParametersParser
         double[]? bbox = null;
         if (query.TryGetValue("bbox", out var bboxRaw) && !string.IsNullOrWhiteSpace(bboxRaw))
         {
-            bbox = bboxRaw.Split(',')
-                .Select(v => double.Parse(v.Trim(), CultureInfo.InvariantCulture))
-                .ToArray();
+            try
+            {
+                bbox = bboxRaw.Split(',')
+                    .Select(v => double.Parse(v.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture))
+                    .ToArray();
+            }
+            catch (Exception ex) when (ex is FormatException or OverflowException)
+            {
+                throw new ArgumentException($"Invalid 'bbox' value: '{bboxRaw}'.", ex);
+            }
+
+            if (bbox.Length != 4 || bbox.Any(v => !double.IsFinite(v)))
+                throw new ArgumentException("bbox must contain exactly 4 finite values: minx,miny,maxx,maxy.");
+
+            if (bbox[0] > bbox[2] || bbox[1] > bbox[3])
+                throw new ArgumentException("bbox minimum values must not exceed maximum values.");
         }
 
         var bboxCrs = 4326;
@@ -816,21 +834,21 @@ public static class FeatureQueryParametersParser
 
     private static bool ParseBool(IDictionary<string, string?> query, string key)
     {
-        return query.TryGetValue(key, out var raw) &&
-               bool.TryParse(raw, out var val) &&
-               val;
+        if (!query.TryGetValue(key, out var raw))
+            return false;
+        if (bool.TryParse(raw, out var value))
+            return value;
+        throw new ArgumentException($"Invalid '{key}' value: '{raw}'. Expected true or false.");
     }
 
     private static int? ParseInt(IDictionary<string, string?> query, string key)
     {
-        if (query.TryGetValue(key, out var raw) &&
-            !string.IsNullOrWhiteSpace(raw) &&
-            int.TryParse(raw, CultureInfo.InvariantCulture, out var value))
-        {
+        if (!query.TryGetValue(key, out var raw))
+            return null;
+        if (!string.IsNullOrWhiteSpace(raw) &&
+            int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value))
             return value;
-        }
-
-        return null;
+        throw new ArgumentException($"Invalid '{key}' value: '{raw}'. Expected an integer.");
     }
 
     private static IReadOnlyList<string>? ParseList(IDictionary<string, string?> query, string key)

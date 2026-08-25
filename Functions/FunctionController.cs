@@ -1,4 +1,5 @@
 ﻿using Microsoft.AspNetCore.Mvc;
+using Npgsql;
 using PgDataHub.Auth;
 using PgDataHub.Config;
 using PgDataHub.Metadata;
@@ -58,6 +59,17 @@ public sealed class FunctionController : ControllerBase
         return Ok(function);
     }
 
+    [HttpGet("{oid:long}")]
+    public async Task<ActionResult<FunctionMetadata>> GetByOid(uint oid, CancellationToken ct)
+    {
+        var function = await _functions.GetFunctionAsync(oid, ct);
+        if (function is null)
+            return NotFound(new { error = "Function not found." });
+        if (await ForbidFunctionAsync(function.Schema, function.Name, ct) is { } forbidden)
+            return forbidden;
+        return Ok(function);
+    }
+
     /// <summary>Returns a 403 result when the caller may not access the function; otherwise null.</summary>
     private async Task<ActionResult?> ForbidFunctionAsync(
         string schema, string name, CancellationToken ct)
@@ -100,6 +112,38 @@ public sealed class FunctionController : ControllerBase
         catch (ArgumentException ex)
         {
             return BadRequest(new { error = ex.Message });
+        }
+        catch (PostgresException ex) when (ex.SqlState.StartsWith("22", StringComparison.Ordinal))
+        {
+            return BadRequest(new { error = "One or more function parameter values are invalid." });
+        }
+    }
+
+    [HttpGet("{oid:long}/items")]
+    public async Task<IActionResult> GetItemsByOid(uint oid, CancellationToken ct)
+    {
+        var function = await _functions.GetFunctionAsync(oid, ct);
+        if (function is null)
+            return NotFound(new { error = "Function not found." });
+        if (await ForbidFunctionAsync(function.Schema, function.Name, ct) is { } forbidden)
+            return forbidden;
+
+        try
+        {
+            await _functions.ExecuteAsync(oid, Request.Query, Response, ct);
+            return new EmptyResult();
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return NotFound(new { error = ex.Message });
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (PostgresException ex) when (ex.SqlState.StartsWith("22", StringComparison.Ordinal))
+        {
+            return BadRequest(new { error = "One or more function parameter values are invalid." });
         }
     }
 }

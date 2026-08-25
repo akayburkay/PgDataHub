@@ -41,16 +41,13 @@ public sealed class FeatureResult : IAsyncDisposable
 public sealed class FeatureService
 {
     private readonly MetadataService _metadata;
-    private readonly NpgsqlDataSource _dataSource;
     private readonly FeatureQueryBuilder _queryBuilder;
 
     public FeatureService(
         MetadataService metadata,
-        NpgsqlDataSource dataSource,
         FeatureQueryBuilder queryBuilder)
     {
         _metadata = metadata;
-        _dataSource = dataSource;
         _queryBuilder = queryBuilder;
     }
 
@@ -83,8 +80,7 @@ public sealed class FeatureService
             CancellationToken ct = default)
     {
         var connection =
-            await _dataSource
-                .OpenConnectionAsync(ct);
+            await Db.OpenConnectionAsync(ct);
 
         try
         {

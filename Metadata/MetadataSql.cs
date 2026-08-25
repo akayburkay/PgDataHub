@@ -4,7 +4,7 @@ internal static class MetadataSql
 {
     public const string Collections = """
         WITH collections AS (
-            SELECT 
+            SELECT
                 table_schema, 
                 table_name, 
                 table_type
@@ -29,7 +29,7 @@ internal static class MetadataSql
         ),
 
         feature_ids AS (
-            SELECT
+            SELECT DISTINCT ON (n.nspname, c.relname)
                 n.nspname AS table_schema,
                 c.relname AS table_name,
                 a.attname AS feature_id
@@ -38,17 +38,17 @@ internal static class MetadataSql
                 ON c.oid = i.indrelid
             JOIN pg_namespace n
                 ON n.oid = c.relnamespace
-            JOIN pg_attribute a
-                ON a.attrelid = i.indrelid
-               AND a.attnum = ANY(i.indkey)
+            JOIN pg_attribute a ON a.attrelid = i.indrelid
+               AND a.attnum = i.indkey[0]
             WHERE 
                 (
-                    i.indisprimary
+                    (i.indisprimary AND array_length(i.indkey, 1) = 1)
                     OR (
                         i.indisunique
                         AND array_length(i.indkey, 1) = 1
                     )
                 )
+            ORDER BY n.nspname, c.relname, i.indisprimary DESC, i.indexrelid
         )
 
         SELECT
@@ -61,9 +61,14 @@ internal static class MetadataSql
             f.feature_id
         FROM collections c
 
-        LEFT JOIN geometry_columns g
-            ON g.f_table_schema = c.table_schema
-           AND g.f_table_name = c.table_name
+        LEFT JOIN LATERAL (
+            SELECT f_geometry_column, type, srid
+            FROM geometry_columns
+            WHERE f_table_schema = c.table_schema
+              AND f_table_name = c.table_name
+            ORDER BY f_geometry_column
+            LIMIT 1
+        ) g ON true
 
         LEFT JOIN feature_ids f
             ON f.table_schema = c.table_schema
@@ -97,8 +102,10 @@ internal static class MetadataSql
 
     public const string Functions = """
         select
+            p.oid,
             n.nspname,
             p.proname,
+            format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid)),
             case
                 when p.proretset then 'Rowset'
                 when t.typname in ('json', 'jsonb') then 'Json'
@@ -131,6 +138,7 @@ internal static class MetadataSql
 
     public const string FunctionColumns = """
                select
+            p.oid,
             n.nspname,
             p.proname,
             a.attname,
@@ -157,6 +165,7 @@ internal static class MetadataSql
         union all
 
         select
+            p.oid,
             n.nspname,
             p.proname,
             a.name,
@@ -178,14 +187,15 @@ internal static class MetadataSql
             and a.mode = 't'
 
         order by
-            1, 2, 5;
+            1, 6;
         """;
 
     public const string FunctionParameters = """
               select
+            p.oid,
             n.nspname,
             p.proname,
-            a.name,
+            p.proargnames[a.ord],
             format_type(a.type_oid, null)
         from pg_proc p
         join pg_namespace n
@@ -199,10 +209,8 @@ internal static class MetadataSql
             on ext.oid = dep.refobjid
 
         cross join lateral unnest(
-            p.proargnames,
-            p.proargmodes,
-            p.proallargtypes
-        ) as a(name, mode, type_oid)
+            coalesce(p.proallargtypes, p.proargtypes::oid[])
+        ) with ordinality as a(type_oid, ord)
 
         where
             p.prokind = 'f'
@@ -212,10 +220,11 @@ internal static class MetadataSql
                 'information_schema',
                 'topology'
             )
-            and a.mode in ('i', 'b', 'v')
+            and coalesce(p.proargmodes[a.ord], 'i') in ('i', 'b', 'v')
+            and p.proargnames[a.ord] is not null
 
         order by
             n.nspname,
-            p.proname;
+            p.oid, a.ord;
         """;
 }

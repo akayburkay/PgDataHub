@@ -1,245 +1,71 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>PgDataHub — Auth Admin</title>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PgDataHub Control</title>
 <style>
-  :root { --bg:#0f172a; --panel:#1e293b; --line:#334155; --fg:#e2e8f0; --muted:#94a3b8;
-          --accent:#38bdf8; --danger:#f87171; --ok:#4ade80; }
-  * { box-sizing: border-box; }
-  body { margin:0; font:14px/1.5 system-ui,sans-serif; background:var(--bg); color:var(--fg); }
-  header { padding:16px 24px; border-bottom:1px solid var(--line); }
-  h1 { margin:0; font-size:18px; }
-  main { padding:24px; max-width:1100px; margin:0 auto; }
-  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end; }
-  label { display:block; font-size:12px; color:var(--muted); margin-bottom:2px; }
-  input, select, textarea, button { font:inherit; }
-  input, select, textarea {
-    background:var(--bg); color:var(--fg); border:1px solid var(--line);
-    border-radius:6px; padding:7px 9px; }
-  textarea { width:100%; min-height:64px; font-family:ui-monospace,monospace; }
-  button { background:var(--accent); color:#06283d; border:0; border-radius:6px;
-           padding:8px 14px; font-weight:600; cursor:pointer; }
-  button.ghost { background:transparent; color:var(--fg); border:1px solid var(--line); }
-  button.danger { background:var(--danger); color:#3b0a0a; }
-  .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px;
-           padding:16px; margin-bottom:20px; }
-  .tabs { display:flex; gap:8px; margin-bottom:16px; }
-  .tabs button { background:transparent; color:var(--muted); border:1px solid var(--line); }
-  .tabs button.active { background:var(--accent); color:#06283d; }
-  table { width:100%; border-collapse:collapse; }
-  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
-  th { color:var(--muted); font-weight:600; font-size:12px; }
-  code { font-family:ui-monospace,monospace; }
-  .msg { padding:8px 12px; border-radius:6px; margin:10px 0; display:none; }
-  .msg.err { background:#451a1a; color:#fecaca; display:block; }
-  .msg.ok  { background:#16351f; color:#bbf7d0; display:block; }
-  .hidden { display:none; }
-  dialog { background:var(--panel); color:var(--fg); border:1px solid var(--line);
-           border-radius:10px; padding:20px; max-width:520px; }
-  dialog::backdrop { background:rgba(0,0,0,.6); }
-  .key-pill { background:var(--bg); border:1px solid var(--line); padding:10px;
-              border-radius:6px; word-break:break-all; }
-  small.hint { color:var(--muted); }
+:root{color-scheme:dark;--bg:#090b10;--side:#0d1017;--card:#111620;--card2:#151b27;--line:#252d3b;--text:#edf2fa;--muted:#8994a7;--brand:#7c8cff;--brand2:#a878ff;--good:#3ddc97;--bad:#ff6b7a;--warn:#f8bb55;--shadow:0 18px 50px #0007}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 85% -15%,#30215d55,transparent 32%),var(--bg);color:var(--text);font:14px/1.5 Inter,ui-sans-serif,system-ui,sans-serif}button,input,select,textarea{font:inherit}button{cursor:pointer}.shell{min-height:100vh;display:grid;grid-template-columns:248px 1fr}.sidebar{position:sticky;top:0;height:100vh;padding:28px 18px;background:#0b0e14e8;border-right:1px solid var(--line);backdrop-filter:blur(18px)}.brand{display:flex;align-items:center;gap:12px;padding:0 10px 28px}.logo{width:38px;height:38px;border-radius:12px;background:linear-gradient(135deg,var(--brand),var(--brand2));display:grid;place-items:center;font-weight:900;box-shadow:0 8px 28px #7c8cff55}.brand strong{display:block;font-size:16px}.brand small,.muted{color:var(--muted)}nav{display:grid;gap:6px}.nav{border:0;background:transparent;color:var(--muted);padding:11px 12px;border-radius:9px;text-align:left;display:flex;gap:10px;align-items:center}.nav:hover{background:#ffffff08;color:var(--text)}.nav.active{background:#7c8cff18;color:#c9ceff}.credential{position:absolute;left:18px;right:18px;bottom:22px}.content{padding:34px 4vw 60px;max-width:1440px;width:100%}.top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:28px}.top h1{font-size:29px;margin:0;letter-spacing:-.03em}.top p{margin:6px 0;color:var(--muted)}.status{display:flex;align-items:center;gap:8px;padding:7px 11px;border:1px solid var(--line);border-radius:99px;color:var(--muted)}.dot{width:8px;height:8px;border-radius:50%;background:var(--good);box-shadow:0 0 13px var(--good)}.page{display:none}.page.active{display:block}.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:16px}.card{grid-column:span 12;background:linear-gradient(145deg,#141925,#10141d);border:1px solid var(--line);border-radius:15px;padding:20px;box-shadow:var(--shadow)}.half{grid-column:span 6}.third{grid-column:span 4}.card h2,.card h3{margin:0 0 16px;font-size:16px}.head{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}.head h2{margin:0}.fields{display:grid;grid-template-columns:repeat(12,1fr);gap:14px}.field{grid-column:span 6}.field.full{grid-column:span 12}.field.third{grid-column:span 4}.field.quarter{grid-column:span 3}label{display:block;color:var(--muted);font-size:12px;margin:0 0 6px}input,select,textarea{width:100%;border:1px solid var(--line);background:#090d14;color:var(--text);border-radius:9px;padding:10px 11px;outline:0;transition:.15s}input:focus,select:focus,textarea:focus{border-color:var(--brand);box-shadow:0 0 0 3px #7c8cff18}input[type=checkbox]{width:17px;height:17px;accent-color:var(--brand)}.switch{display:flex;gap:9px;align-items:center;color:var(--text);font-size:14px}.switch label{margin:0}.btn{border:0;border-radius:9px;padding:9px 14px;font-weight:650;background:linear-gradient(135deg,var(--brand),var(--brand2));color:white}.btn:hover{filter:brightness(1.1)}.btn.secondary{background:#1b2230;color:var(--text);border:1px solid var(--line)}.btn.danger{background:#3b1720;color:#ff9aa5;border:1px solid #6f2936}.btn.small{padding:6px 9px;font-size:12px}.actions{display:flex;gap:8px;justify-content:flex-end;margin-top:18px}.tag{display:inline-flex;padding:3px 7px;border-radius:6px;background:#242c3b;color:#b9c3d5;margin:2px;font-size:12px}.metric{font-size:30px;font-weight:750;letter-spacing:-.04em}.metric-label{color:var(--muted)}table{width:100%;border-collapse:collapse}th,td{padding:11px 9px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}th{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}tbody tr:hover{background:#ffffff03}.empty{padding:28px;text-align:center;color:var(--muted)}.notice{display:none;position:fixed;right:24px;bottom:24px;z-index:20;max-width:420px;padding:13px 16px;border-radius:11px;background:#17201d;border:1px solid #2d6e51;box-shadow:var(--shadow)}.notice.error{background:#29151a;border-color:#73323d}.notice.show{display:block}.restart{display:none;padding:11px 14px;border:1px solid #775a22;background:#2b2416;color:#ffd98c;border-radius:10px;margin-bottom:16px}.restart.show{display:block}dialog{width:min(620px,calc(100% - 30px));background:var(--card);color:var(--text);border:1px solid var(--line);border-radius:15px;padding:22px;box-shadow:var(--shadow)}dialog::backdrop{background:#03050acc;backdrop-filter:blur(4px)}.secret{font:13px ui-monospace,monospace;background:#090d14;border:1px solid var(--line);padding:13px;border-radius:9px;word-break:break-all}.table-row{display:grid;grid-template-columns:1.2fr 1fr 1fr auto;gap:10px;align-items:end;padding:10px 0;border-bottom:1px solid var(--line)}.section-note{font-size:12px;color:var(--muted);margin:-10px 0 16px}.danger-zone{border-color:#4b2530}.hidden{display:none!important}@media(max-width:900px){.shell{display:block}.sidebar{position:static;width:auto;height:auto;padding:15px}.brand{padding-bottom:12px}.sidebar nav{display:flex;overflow:auto}.credential{position:static;margin-top:12px}.content{padding:24px 15px}.half,.third{grid-column:span 12}.field,.field.third,.field.quarter{grid-column:span 12}.top{display:block}.status{margin-top:14px;width:max-content}.table-row{grid-template-columns:1fr}}
+.login-wall{position:fixed;inset:0;z-index:100;background:radial-gradient(circle at 50% 0,#30215d88,transparent 38%),#090b10;display:grid;place-items:center;padding:20px}.login-box{width:min(410px,100%);background:#111620;border:1px solid var(--line);border-radius:20px;padding:30px;box-shadow:var(--shadow)}.login-box .logo{margin-bottom:20px}.login-box h1{margin:0;font-size:25px}.login-box p{color:var(--muted);margin:7px 0 22px}.lookup-list{max-height:430px;overflow:auto;margin-top:12px;border-top:1px solid var(--line)}.lookup-item{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;width:100%;text-align:left;border:0;border-bottom:1px solid var(--line);background:transparent;color:var(--text);padding:11px;border-left:3px solid transparent}.lookup-item:hover{background:#7c8cff14}.lookup-item.selected{background:#7c8cff1f;border-left-color:var(--brand)}.lookup-item small{display:block;color:var(--muted)}.lookup-check{width:24px;height:24px;border-radius:7px;border:1px solid #3a4559;display:grid;place-items:center;color:transparent;font-weight:900;background:#0b1018}.lookup-item.selected .lookup-check{color:white;border-color:var(--brand);background:linear-gradient(135deg,var(--brand),var(--brand2))}.lookup-footer{display:flex;justify-content:space-between;align-items:center;gap:12px;padding-top:14px}.lookup-count{color:var(--muted);font-size:12px}.pick{display:flex;gap:6px}.pick input{flex:1}
 </style>
 </head>
-<body>
-<header><h1>PgDataHub — Auth Admin</h1></header>
-<main>
-  <div class="panel">
-    <div class="row">
-      <div><label>API key header</label><input id="hdr" value="X-API-Key" size="14" /></div>
-      <div style="flex:1"><label>Admin API key</label>
-        <input id="adminKey" type="password" style="width:100%" placeholder="paste an admin key" /></div>
-      <button id="saveCreds">Save</button>
-    </div>
-    <small class="hint">Stored in this browser tab only (sessionStorage). Sent on every request.</small>
-  </div>
+<body><div id="loginWall" class="login-wall"><form id="loginForm" class="login-box"><div class="logo">P</div><h1>Administrator login</h1><p>Use an active API key assigned to the configured admin role.</p><label>Admin API key</label><input id="loginKey" type="password" autocomplete="current-password" required autofocus><button class="btn" style="width:100%;margin-top:14px" type="submit">Sign in securely</button><div id="loginError" style="color:var(--bad);margin-top:12px"></div></form></div><div class="shell">
+<aside class="sidebar"><div class="brand"><div class="logo">P</div><div><strong>PgDataHub</strong><small>Control center</small></div></div>
+<nav><button class="nav active" data-page="overview">◫ Overview</button><button class="nav" data-page="config">⚙ Configuration</button><button class="nav" data-page="roles">♙ Roles & access</button><button class="nav" data-page="keys">⌁ API keys</button></nav>
+<div class="credential"><button class="btn secondary" style="width:100%" id="logout">Sign out</button></div></aside>
+<main class="content"><div class="top"><div><h1 id="pageTitle">Overview</h1><p id="pageDesc">Runtime and metadata at a glance.</p></div><div class="status"><span class="dot"></span><span id="connectionState">Local bootstrap</span></div></div><div id="restart" class="restart">Configuration saved. Restart PgDataHub before relying on database or authentication pipeline changes.</div>
 
-  <div id="msg" class="msg"></div>
+<section id="overview" class="page active"><div class="grid"><div class="card third"><div class="metric" id="collectionCount">—</div><div class="metric-label">Collections</div></div><div class="card third"><div class="metric" id="functionCount">—</div><div class="metric-label">Functions</div></div><div class="card third"><div class="metric" id="roleCount">—</div><div class="metric-label">Roles</div></div><div class="card half"><h2>Service posture</h2><div id="posture" class="muted">Loading…</div></div><div class="card half"><h2>Live metadata</h2><div id="listenerState" class="muted">Checking listener…</div><div class="actions"><button class="btn secondary small" id="refreshMetadata">Refresh now</button></div></div></div></section>
 
-  <div class="tabs">
-    <button data-tab="keys" class="active">API Keys</button>
-    <button data-tab="roles">Roles</button>
-  </div>
+<section id="config" class="page"><div class="grid">
+<div class="card half"><h2>Database</h2><p class="section-note">Password is never returned. Leave it blank to keep the current value.</p><div class="fields"><div class="field"><label>Host</label><input id="db_host"></div><div class="field"><label>Port</label><input id="db_port" type="number"></div><div class="field"><label>Database</label><input id="db_name"></div><div class="field"><label>User</label><input id="db_user"></div><div class="field full"><label>Password</label><input id="db_password" type="password" placeholder="Keep existing password"></div><div class="field third"><label>Minimum pool</label><input id="db_min" type="number"></div><div class="field third"><label>Maximum pool</label><input id="db_max" type="number"></div><div class="field third"><label>Command timeout (s)</label><input id="db_timeout" type="number"></div></div></div>
+<div class="card half"><h2>Feature service</h2><div class="fields"><div class="field"><label>Default limit</label><input id="feature_default" type="number"></div><div class="field"><label>Maximum limit</label><input id="feature_max" type="number"></div><div class="field full"><label>Collection include globs</label><input id="collections_include" placeholder="*"></div><div class="field full"><label>Collection exclude globs</label><input id="collections_exclude" placeholder="audit_*"></div></div><h2 style="margin-top:24px">Functions</h2><div class="fields"><div class="field"><label>Default timeout (s)</label><input id="function_timeout" type="number"></div><div class="field"><label>Maximum rows</label><input id="function_rows" type="number"></div><div class="field"><label>Include globs</label><input id="function_include"></div><div class="field"><label>Exclude globs</label><input id="function_exclude"></div></div></div>
+<div class="card"><div class="head"><div><h2>Collection column overrides</h2><span class="muted">Allow is a whitelist; hide always wins.</span></div><button class="btn secondary small" id="addTable">+ Add override</button></div><div id="tableOverrides"></div></div>
+<div class="card half"><h2>Authentication</h2><div class="fields"><div class="field full"><label class="switch"><input id="auth_enabled" type="checkbox"> Require authentication</label></div><div class="field"><label>Default role</label><input id="auth_default" placeholder="Empty denies anonymous users"></div><div class="field"><label>Admin role</label><input id="auth_admin"></div><div class="field"><label class="switch"><input id="apikey_enabled" type="checkbox"> API key authentication</label></div><div class="field"><label>API key header</label><input id="apikey_header"></div></div></div>
+<div class="card half"><h2>JWT</h2><div class="fields"><div class="field full"><label class="switch"><input id="jwt_enabled" type="checkbox"> JWT bearer authentication</label></div><div class="field full"><label>Authority</label><input id="jwt_authority"></div><div class="field"><label>Audience</label><input id="jwt_audience"></div><div class="field"><label>Role claim</label><input id="jwt_role"></div></div></div>
+<div class="card"><div class="actions"><button class="btn secondary" id="reloadConfig">Discard changes</button><button class="btn" id="saveConfig">Save configuration</button></div></div></div></section>
 
-  <!-- KEYS -->
-  <section id="tab-keys">
-    <div class="panel">
-      <h3 style="margin-top:0">Create API key</h3>
-      <div class="row">
-        <div><label>Name</label><input id="k_name" /></div>
-        <div><label>Owner</label><input id="k_owner" /></div>
-        <div><label>Description</label><input id="k_desc" /></div>
-        <div><label>Role</label><select id="k_role"></select></div>
-        <div><label>Expires (optional, ISO)</label><input id="k_exp" placeholder="2027-01-01T00:00:00Z" /></div>
-        <button id="k_create">Create</button>
-      </div>
-    </div>
-    <div class="panel">
-      <table>
-        <thead><tr><th>Id</th><th>Name</th><th>Owner</th><th>Role</th><th>Enabled</th>
-          <th>Expires</th><th>Last used</th><th></th></tr></thead>
-        <tbody id="keysBody"></tbody>
-      </table>
-    </div>
-  </section>
+<section id="roles" class="page"><div class="grid"><div class="card"><div class="head"><div><h2>Roles</h2><span class="muted">Deny rules override allow rules.</span></div><button class="btn" id="newRole">+ New role</button></div><div style="overflow:auto"><table><thead><tr><th>Role</th><th>Collections</th><th>Functions</th><th>Column rules</th><th></th></tr></thead><tbody id="rolesBody"></tbody></table></div></div></div></section>
+<section id="keys" class="page"><div class="grid"><div class="card"><div class="head"><div><h2>API keys</h2><span class="muted">Raw secrets are shown exactly once.</span></div><button class="btn" id="newKey">+ Create key</button></div><div style="overflow:auto"><table><thead><tr><th>Name</th><th>Owner</th><th>Role</th><th>Status</th><th>Expires</th><th>Last used</th><th></th></tr></thead><tbody id="keysBody"></tbody></table></div></div></div></section>
+</main></div><div id="notice" class="notice"></div>
 
-  <!-- ROLES -->
-  <section id="tab-roles" class="hidden">
-    <div class="panel">
-      <h3 style="margin-top:0">Create / edit role</h3>
-      <div class="row">
-        <div><label>Name</label><input id="r_name" /></div>
-        <div style="flex:1"><label>Description</label><input id="r_desc" style="width:100%" /></div>
-      </div>
-      <div class="row" style="margin-top:10px">
-        <div style="flex:1"><label>Collections — allow (comma globs)</label>
-          <input id="r_callow" style="width:100%" placeholder="*, public.cities, public.roads*" /></div>
-        <div style="flex:1"><label>Collections — deny</label>
-          <input id="r_cdeny" style="width:100%" /></div>
-      </div>
-      <div class="row" style="margin-top:10px">
-        <div style="flex:1"><label>Functions — allow</label><input id="r_fallow" style="width:100%" /></div>
-        <div style="flex:1"><label>Functions — deny</label><input id="r_fdeny" style="width:100%" /></div>
-      </div>
-      <div style="margin-top:10px">
-        <label>Column rules (JSON: [{"pattern":"public.cities","hide":["population"],"allow":[]}])</label>
-        <textarea id="r_cols">[]</textarea>
-      </div>
-      <div style="margin-top:10px"><button id="r_save">Save role</button>
-        <button id="r_clear" class="ghost">Clear form</button></div>
-    </div>
-    <div class="panel">
-      <table>
-        <thead><tr><th>Name</th><th>Description</th><th>Collections</th><th>Functions</th><th></th></tr></thead>
-        <tbody id="rolesBody"></tbody>
-      </table>
-    </div>
-  </section>
-</main>
-
-<dialog id="keyDialog">
-  <h3 style="margin-top:0">API key created</h3>
-  <p>Copy it now — it is shown only once.</p>
-  <div class="key-pill"><code id="rawKey"></code></div>
-  <div style="margin-top:16px;text-align:right"><button id="keyDialogClose">Done</button></div>
-</dialog>
+<dialog id="roleDialog"><div class="head"><h2>Role</h2><button class="btn secondary small" data-close="roleDialog">Close</button></div><div class="fields"><div class="field"><label>Name</label><input id="r_name"></div><div class="field"><label>Description</label><input id="r_desc"></div><div class="field"><label>Collections allow</label><input id="r_callow"></div><div class="field"><label>Collections deny</label><input id="r_cdeny"></div><div class="field"><label>Functions allow</label><input id="r_fallow"></div><div class="field"><label>Functions deny</label><input id="r_fdeny"></div><div class="field full"><label>Column rules (JSON array)</label><textarea id="r_columns" rows="7" placeholder='[{"pattern":"public.*","hide":["secret"],"allow":[]}]'></textarea></div></div><div class="actions"><button class="btn" id="saveRole">Save role</button></div></dialog>
+<dialog id="keyDialog"><div class="head"><h2>Create API key</h2><button class="btn secondary small" data-close="keyDialog">Close</button></div><div class="fields"><div class="field"><label>Name</label><input id="k_name"></div><div class="field"><label>Owner</label><input id="k_owner"></div><div class="field full"><label>Description</label><input id="k_desc"></div><div class="field"><label>Role</label><select id="k_role"></select></div><div class="field"><label>Expires at</label><input id="k_expires" type="datetime-local"></div></div><div class="actions"><button class="btn" id="createKey">Create key</button></div></dialog>
+<dialog id="secretDialog"><h2>Copy this key now</h2><p class="muted">It cannot be retrieved again.</p><div class="secret" id="rawKey"></div><div class="actions"><button class="btn secondary" id="copyKey">Copy</button><button class="btn" data-close="secretDialog">Done</button></div></dialog>
+<dialog id="lookupDialog"><div class="head"><h2 id="lookupTitle">Select</h2><button class="btn secondary small" data-close="lookupDialog">Close</button></div><input id="lookupSearch" type="search" placeholder="Search schema, table, function or column…" autocomplete="off"><div id="lookupList" class="lookup-list"></div><div class="lookup-footer"><span id="lookupCount" class="lookup-count">0 selected</span><button class="btn small" id="lookupDone">Done</button></div></dialog>
 
 <script>
-const $ = s => document.querySelector(s);
-const enc = encodeURIComponent;
-let HDR = sessionStorage.getItem('pgdh_hdr') || 'X-API-Key';
-let KEY = sessionStorage.getItem('pgdh_key') || '';
-$('#hdr').value = HDR; $('#adminKey').value = KEY;
-
-function msg(text, ok) {
-  const m = $('#msg'); m.textContent = text; m.className = 'msg ' + (ok ? 'ok' : 'err');
-  if (ok) setTimeout(() => { m.className = 'msg'; }, 2500);
-}
-function headers(json) {
-  const h = {}; if (KEY) h[HDR] = KEY; if (json) h['Content-Type'] = 'application/json'; return h;
-}
-async function api(method, url, body) {
-  const res = await fetch(url, { method, headers: headers(!!body), body: body ? JSON.stringify(body) : undefined });
-  if (res.status === 204) return null;
-  const text = await res.text();
-  const data = text ? JSON.parse(text) : null;
-  if (!res.ok) throw new Error((data && data.error) || (res.status + ' ' + res.statusText));
-  return data;
-}
-const list = v => (v || '').split(',').map(s => s.trim()).filter(Boolean);
-
-$('#saveCreds').onclick = () => {
-  HDR = $('#hdr').value.trim() || 'X-API-Key'; KEY = $('#adminKey').value.trim();
-  sessionStorage.setItem('pgdh_hdr', HDR); sessionStorage.setItem('pgdh_key', KEY);
-  msg('Saved.', true); refresh();
-};
-
-document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
-  document.querySelectorAll('.tabs button').forEach(x => x.classList.remove('active'));
-  b.classList.add('active');
-  $('#tab-keys').classList.toggle('hidden', b.dataset.tab !== 'keys');
-  $('#tab-roles').classList.toggle('hidden', b.dataset.tab !== 'roles');
-});
-
-// ---- Keys ----
-async function loadKeys() {
-  const keys = await api('GET', '/auth/apikeys');
-  $('#keysBody').innerHTML = keys.map(k => `
-    <tr><td>${k.id}</td><td>${esc(k.name)}</td><td>${esc(k.owner || '')}</td>
-    <td>${esc(k.roleName)}</td><td>${k.enabled ? 'yes' : 'no'}</td>
-    <td>${k.expiresAt || ''}</td><td>${k.lastUsedAt || ''}</td>
-    <td><button class="danger" data-del="${k.id}">Delete</button></td></tr>`).join('');
-  $('#keysBody').querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
-    if (!confirm('Delete key #' + b.dataset.del + '?')) return;
-    try { await api('DELETE', '/auth/apikeys/' + b.dataset.del); msg('Deleted.', true); loadKeys(); }
-    catch (e) { msg(e.message); }
-  });
-}
-$('#k_create').onclick = async () => {
-  try {
-    const r = await api('POST', '/auth/apikeys', {
-      name: $('#k_name').value, owner: $('#k_owner').value, description: $('#k_desc').value,
-      roleName: $('#k_role').value, expiresAt: $('#k_exp').value || null });
-    $('#rawKey').textContent = r.apiKey; $('#keyDialog').showModal();
-    $('#k_name').value = $('#k_owner').value = $('#k_desc').value = $('#k_exp').value = '';
-    loadKeys();
-  } catch (e) { msg(e.message); }
-};
-$('#keyDialogClose').onclick = () => $('#keyDialog').close();
-
-// ---- Roles ----
-async function loadRoles() {
-  const roles = await api('GET', '/auth/roles');
-  const sel = $('#k_role'); sel.innerHTML = roles.map(r => `<option>${esc(r.name)}</option>`).join('');
-  $('#rolesBody').innerHTML = roles.map(r => `
-    <tr><td><code>${esc(r.name)}</code></td><td>${esc(r.description || '')}</td>
-    <td>${esc((r.collectionsAllow || []).join(', '))}</td>
-    <td>${esc((r.functionsAllow || []).join(', '))}</td>
-    <td><button class="ghost" data-edit='${esc(JSON.stringify(r))}'>Edit</button>
-        <button class="danger" data-delr="${esc(r.name)}">Delete</button></td></tr>`).join('');
-  $('#rolesBody').querySelectorAll('[data-edit]').forEach(b => b.onclick = () => fillRole(JSON.parse(b.dataset.edit)));
-  $('#rolesBody').querySelectorAll('[data-delr]').forEach(b => b.onclick = async () => {
-    if (!confirm('Delete role ' + b.dataset.delr + '?')) return;
-    try { await api('DELETE', '/auth/roles/' + enc(b.dataset.delr)); msg('Deleted.', true); loadRoles(); }
-    catch (e) { msg(e.message); }
-  });
-}
-function fillRole(r) {
-  $('#r_name').value = r.name; $('#r_desc').value = r.description || '';
-  $('#r_callow').value = (r.collectionsAllow || []).join(', ');
-  $('#r_cdeny').value = (r.collectionsDeny || []).join(', ');
-  $('#r_fallow').value = (r.functionsAllow || []).join(', ');
-  $('#r_fdeny').value = (r.functionsDeny || []).join(', ');
-  $('#r_cols').value = JSON.stringify(r.columnRules || [], null, 0);
-}
-$('#r_clear').onclick = () => fillRole({ name:'', columnRules:[] });
-$('#r_save').onclick = async () => {
-  const name = $('#r_name').value.trim();
-  if (!name) return msg('Role name required.');
-  let cols;
-  try { cols = JSON.parse($('#r_cols').value || '[]'); }
-  catch { return msg('Column rules: invalid JSON.'); }
-  try {
-    await api('PUT', '/auth/roles/' + enc(name), {
-      description: $('#r_desc').value,
-      collectionsAllow: list($('#r_callow').value), collectionsDeny: list($('#r_cdeny').value),
-      functionsAllow: list($('#r_fallow').value), functionsDeny: list($('#r_fdeny').value),
-      columnRules: cols });
-    msg('Saved.', true); loadRoles();
-  } catch (e) { msg(e.message); }
-};
-
-function esc(s) { return String(s).replace(/[&<>"']/g, c =>
-  ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
-
-async function refresh() {
-  if (!KEY) { msg('Enter an admin API key to begin.'); return; }
-  try { await loadRoles(); await loadKeys(); } catch (e) { msg(e.message); }
-}
-refresh();
-</script>
-</body>
-</html>
+const $=s=>document.querySelector(s),$$=s=>document.querySelectorAll(s),csv=v=>(v||'').split(',').map(x=>x.trim()).filter(Boolean),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let CSRF=sessionStorage.pgdh_csrf||'',CONFIG=null,ROLES=[],LOOKUP={collections:[],functions:[]},lookupState=null;
+const pages={overview:['Overview','Runtime and metadata at a glance.'],config:['Configuration','Every pgdatahub.ini runtime setting in one place.'],roles:['Roles & access','Least-privilege collection, function and column policies.'],keys:['API keys','Issue and revoke application credentials.']};
+$$('.nav').forEach(b=>b.onclick=()=>{$$('.nav').forEach(x=>x.classList.toggle('active',x===b));$$('.page').forEach(x=>x.classList.toggle('active',x.id===b.dataset.page));$('#pageTitle').textContent=pages[b.dataset.page][0];$('#pageDesc').textContent=pages[b.dataset.page][1]});
+$$('[data-close]').forEach(b=>b.onclick=()=>$('#'+b.dataset.close).close());
+function notify(text,error=false){let n=$('#notice');n.textContent=text;n.className='notice show'+(error?' error':'');clearTimeout(n.t);n.t=setTimeout(()=>n.className='notice',4200)}
+function headers(json,method){let h={};if(json)h['Content-Type']='application/json';if(CSRF&&!['GET','HEAD'].includes(method))h['X-PgDataHub-CSRF']=CSRF;return h}
+async function api(method,url,body){let r=await fetch(url,{method,credentials:'same-origin',headers:headers(body!==undefined,method),body:body===undefined?undefined:JSON.stringify(body)}),text=await r.text(),data=null;try{data=text?JSON.parse(text):null}catch{data=text}if(r.status===401&&url!='/admin/session')$('#loginWall').classList.remove('hidden');if(!r.ok)throw Error(data?.error||`${r.status} ${r.statusText}`);return data}
+$('#loginForm').onsubmit=async e=>{e.preventDefault();$('#loginError').textContent='';try{let r=await api('POST','/admin/session',{apiKey:$('#loginKey').value});CSRF=r.csrfToken;sessionStorage.pgdh_csrf=CSRF;$('#loginKey').value='';$('#loginWall').classList.add('hidden');await refresh()}catch(x){$('#loginError').textContent=x.message}};
+$('#logout').onclick=async()=>{try{await api('DELETE','/admin/session')}catch{}CSRF='';delete sessionStorage.pgdh_csrf;$('#loginWall').classList.remove('hidden')};
+function tags(v){return (v||[]).map(x=>`<span class="tag">${esc(x)}</span>`).join('')||'<span class="muted">none</span>'}
+async function refresh(){try{await Promise.all([loadConfig(),loadRoles(),loadKeys(),loadMetadata(),loadLookup(),loadListener()]);$('#connectionState').textContent='Secure admin session';$('#loginWall').classList.add('hidden')}catch(e){notify(e.message,true)}}
+async function loadLookup(){LOOKUP=await api('GET','/admin/config/lookup');$('#collectionCount').textContent=LOOKUP.collections?.length??0;$('#functionCount').textContent=LOOKUP.functions?.length??0}
+async function loadListener(){let s=await api('GET','/admin/config/metadata-listener');$('#listenerState').innerHTML=s.triggerInstalled&&s.functionInstalled?'<span style="color:var(--good)">● Event trigger is installed and listening.</span>':'<span style="color:var(--bad)">● Listener database objects are missing.</span>'}
+$('#refreshMetadata').onclick=async()=>{try{await api('POST','/admin/config/metadata-refresh');await Promise.all([loadMetadata(),loadLookup()]);notify('Metadata refreshed')}catch(e){notify(e.message,true)}};
+async function loadMetadata(){let m=await api('GET','/admin/config/lookup');LOOKUP=m;$('#collectionCount').textContent=m.collections?.length??0;$('#functionCount').textContent=m.functions?.length??0}
+async function loadConfig(){CONFIG=await api('GET','/admin/config');fillConfig(CONFIG);$('#posture').innerHTML=`Authentication <b>${CONFIG.auth.enabled?'enabled':'disabled'}</b><br>API keys <b>${CONFIG.auth.apiKey.enabled?'enabled':'disabled'}</b><br>JWT <b>${CONFIG.auth.jwt.enabled?'enabled':'disabled'}</b><br>Database <b>${esc(CONFIG.database.host)}:${CONFIG.database.port}/${esc(CONFIG.database.database)}</b>`}
+function fillConfig(c){let d=c.database;$('#db_host').value=d.host;$('#db_port').value=d.port;$('#db_name').value=d.database;$('#db_user').value=d.user;$('#db_password').value='';$('#db_password').placeholder=d.passwordConfigured?'Configured — leave blank to keep':'Set database password';$('#db_min').value=d.minPoolSize;$('#db_max').value=d.maxPoolSize;$('#db_timeout').value=d.commandTimeout;$('#collections_include').value=c.collections.include.join(', ');$('#collections_exclude').value=c.collections.exclude.join(', ');$('#feature_default').value=c.feature.defaultLimit;$('#feature_max').value=c.feature.maxLimit;$('#function_include').value=c.function.include.join(', ');$('#function_exclude').value=c.function.exclude.join(', ');$('#function_timeout').value=c.function.defaultTimeout;$('#function_rows').value=c.function.maxRows;$('#auth_enabled').checked=c.auth.enabled;$('#auth_default').value=c.auth.defaultRole;$('#auth_admin').value=c.auth.adminRole;$('#apikey_enabled').checked=c.auth.apiKey.enabled;$('#apikey_header').value=c.auth.apiKey.header;$('#jwt_enabled').checked=c.auth.jwt.enabled;$('#jwt_authority').value=c.auth.jwt.authority;$('#jwt_audience').value=c.auth.jwt.audience;$('#jwt_role').value=c.auth.jwt.roleClaim;renderOverrides(c.tables)}
+function renderOverrides(rows){let root=$('#tableOverrides');root.innerHTML='';(rows||[]).forEach(addOverride);if(!rows?.length)root.innerHTML='<div class="empty">No collection-specific overrides.</div>'}
+function addOverride(v={collection:'',allow:[],hide:[]}){let root=$('#tableOverrides');root.querySelector('.empty')?.remove();let row=document.createElement('div');row.className='table-row';row.innerHTML=`<div><label>schema.collection</label><div class="pick"><input data-k="collection" value="${esc(v.collection)}"><button class="btn secondary small" data-pick="table">⌕</button></div></div><div><label>Allow columns</label><div class="pick"><input data-k="allow" value="${esc((v.allow||[]).join(', '))}"><button class="btn secondary small" data-pick="allow">⌕</button></div></div><div><label>Hide columns</label><div class="pick"><input data-k="hide" value="${esc((v.hide||[]).join(', '))}"><button class="btn secondary small" data-pick="hide">⌕</button></div></div><button class="btn danger small" data-remove>Remove</button>`;row.querySelector('[data-remove]').onclick=()=>row.remove();row.querySelector('[data-pick=table]').onclick=()=>openLookup('collections',row.querySelector('[data-k=collection]'),false);row.querySelector('[data-pick=allow]').onclick=()=>openLookup('columns',row.querySelector('[data-k=allow]'),true,row.querySelector('[data-k=collection]').value);row.querySelector('[data-pick=hide]').onclick=()=>openLookup('columns',row.querySelector('[data-k=hide]'),true,row.querySelector('[data-k=collection]').value);root.append(row)}$('#addTable').onclick=()=>addOverride();
+function openLookup(type,input,multi=false,collection=''){lookupState={type,input,multi,collection,selected:csv(input.value)};$('#lookupTitle').textContent=type==='functions'?'Select function':type==='columns'?'Select columns':'Select collection';$('#lookupSearch').value='';renderLookup();$('#lookupDialog').showModal();setTimeout(()=>$('#lookupSearch').focus(),30)}
+function lookupItems(){if(!lookupState)return[];if(lookupState.type==='collections')return LOOKUP.collections.map(c=>({value:c.id,title:c.id,sub:`${c.type} · ${c.columns.length} columns`}));if(lookupState.type==='functions')return LOOKUP.functions.map(f=>({value:`${f.schema}.${f.name}`,title:f.signature,sub:`OID ${f.oid}`}));let c=LOOKUP.collections.find(x=>x.id.toLowerCase()===lookupState.collection.toLowerCase());return(c?.columns||[]).map(x=>({value:x,title:x,sub:lookupState.collection}))}
+function lookupSelected(value){return lookupState.selected.some(v=>v.toLowerCase()===value.toLowerCase())}function renderLookup(){let q=$('#lookupSearch').value.trim().toLowerCase(),items=lookupItems().filter(x=>(x.title+' '+x.sub).toLowerCase().includes(q));$('#lookupList').innerHTML=items.map((x,i)=>`<button type="button" class="lookup-item${lookupSelected(x.value)?' selected':''}" data-li="${i}" aria-pressed="${lookupSelected(x.value)}"><span><b>${esc(x.title)}</b><small>${esc(x.sub)}</small></span><span class="lookup-check" aria-hidden="true">✓</span></button>`).join('')||'<div class="empty">No matches.</div>';$('#lookupCount').textContent=`${lookupState.selected.length} selected`;$$('[data-li]').forEach(b=>b.onclick=()=>{let x=items[+b.dataset.li],at=lookupState.selected.findIndex(v=>v.toLowerCase()===x.value.toLowerCase());if(lookupState.multi){if(at>=0)lookupState.selected.splice(at,1);else lookupState.selected.push(x.value);lookupState.input.value=lookupState.selected.join(', ');renderLookup()}else{lookupState.selected=[x.value];lookupState.input.value=x.value;renderLookup();setTimeout(()=>$('#lookupDialog').close(),120)}})}$('#lookupSearch').oninput=renderLookup;$('#lookupDone').onclick=()=>$('#lookupDialog').close();
+function addPicker(id,type){let input=$('#'+id);if(!input||input.parentElement.classList.contains('pick'))return;let wrap=document.createElement('div');wrap.className='pick';input.parentNode.insertBefore(wrap,input);wrap.append(input);let b=document.createElement('button');b.type='button';b.className='btn secondary small';b.textContent='⌕';b.onclick=()=>openLookup(type,input,true);wrap.append(b)}
+['collections_include','collections_exclude','r_callow','r_cdeny'].forEach(id=>addPicker(id,'collections'));['function_include','function_exclude','r_fallow','r_fdeny'].forEach(id=>addPicker(id,'functions'));
+function readConfig(){return{database:{host:$('#db_host').value,port:+$('#db_port').value,database:$('#db_name').value,user:$('#db_user').value,password:$('#db_password').value||null,minPoolSize:+$('#db_min').value,maxPoolSize:+$('#db_max').value,commandTimeout:+$('#db_timeout').value},collections:{include:csv($('#collections_include').value),exclude:csv($('#collections_exclude').value)},feature:{defaultLimit:+$('#feature_default').value,maxLimit:+$('#feature_max').value},function:{include:csv($('#function_include').value),exclude:csv($('#function_exclude').value),defaultTimeout:+$('#function_timeout').value,maxRows:+$('#function_rows').value},auth:{enabled:$('#auth_enabled').checked,defaultRole:$('#auth_default').value,adminRole:$('#auth_admin').value,apiKey:{enabled:$('#apikey_enabled').checked,header:$('#apikey_header').value},jwt:{enabled:$('#jwt_enabled').checked,authority:$('#jwt_authority').value,audience:$('#jwt_audience').value,roleClaim:$('#jwt_role').value}},tables:[...$$('#tableOverrides .table-row')].map(r=>({collection:r.querySelector('[data-k=collection]').value,allow:csv(r.querySelector('[data-k=allow]').value),hide:csv(r.querySelector('[data-k=hide]').value)}))}}
+$('#saveConfig').onclick=async()=>{try{let r=await api('PUT','/admin/config',readConfig());notify(r.message);$('#restart').classList.toggle('show',r.restartRequired);await loadConfig()}catch(e){notify(e.message,true)}};$('#reloadConfig').onclick=()=>fillConfig(CONFIG);
+async function loadRoles(){ROLES=await api('GET','/auth/roles');$('#roleCount').textContent=ROLES.length;$('#k_role').innerHTML=ROLES.map(r=>`<option value="${esc(r.name)}">${esc(r.name)}</option>`).join('');$('#rolesBody').innerHTML=ROLES.map((r,i)=>`<tr><td><b>${esc(r.name)}</b><br><span class="muted">${esc(r.description)}</span></td><td>${tags(r.collectionsAllow)}<div class="muted">deny: ${(r.collectionsDeny||[]).length}</div></td><td>${tags(r.functionsAllow)}<div class="muted">deny: ${(r.functionsDeny||[]).length}</div></td><td>${r.columnRules?.length||0}</td><td><button class="btn secondary small" data-makekey="${esc(r.name)}">Create key</button> <button class="btn secondary small" data-edit="${i}">Edit</button> <button class="btn danger small" data-delete="${esc(r.name)}">Delete</button></td></tr>`).join('')||'<tr><td colspan="5" class="empty">No roles.</td></tr>';$$('[data-edit]').forEach(b=>b.onclick=()=>openRole(ROLES[+b.dataset.edit]));$$('[data-delete]').forEach(b=>b.onclick=()=>deleteRole(b.dataset.delete));$$('[data-makekey]').forEach(b=>b.onclick=()=>openKeyForRole(b.dataset.makekey))}
+function openRole(r={name:'',description:'',collectionsAllow:[],collectionsDeny:[],functionsAllow:[],functionsDeny:[],columnRules:[]}){$('#r_name').value=r.name;$('#r_name').disabled=!!r.name;$('#r_desc').value=r.description||'';$('#r_callow').value=(r.collectionsAllow||[]).join(', ');$('#r_cdeny').value=(r.collectionsDeny||[]).join(', ');$('#r_fallow').value=(r.functionsAllow||[]).join(', ');$('#r_fdeny').value=(r.functionsDeny||[]).join(', ');$('#r_columns').value=JSON.stringify(r.columnRules||[],null,2);$('#roleDialog').showModal()}$('#newRole').onclick=()=>openRole();
+$('#saveRole').onclick=async()=>{try{let cols=JSON.parse($('#r_columns').value||'[]'),name=$('#r_name').value.trim();if(!name)throw Error('Role name is required.');await api('PUT','/auth/roles/'+encodeURIComponent(name),{description:$('#r_desc').value,collectionsAllow:csv($('#r_callow').value),collectionsDeny:csv($('#r_cdeny').value),functionsAllow:csv($('#r_fallow').value),functionsDeny:csv($('#r_fdeny').value),columnRules:cols});$('#roleDialog').close();notify('Role saved');await loadRoles()}catch(e){notify(e.message,true)}};
+async function deleteRole(name){if(!confirm(`Delete role ${name}?`))return;try{await api('DELETE','/auth/roles/'+encodeURIComponent(name));notify('Role deleted');await loadRoles()}catch(e){notify(e.message,true)}}
+async function loadKeys(){let keys=await api('GET','/auth/apikeys');$('#keysBody').innerHTML=keys.map(k=>`<tr><td><b>${esc(k.name)}</b><br><span class="muted">#${k.id} ${esc(k.description)}</span></td><td>${esc(k.owner)}</td><td>${esc(k.roleName)}</td><td><button class="btn secondary small" data-toggle="${k.id}" data-enabled="${k.enabled}" data-expires="${esc(k.expiresAt||'')}">${k.enabled?'Active':'Disabled'}</button></td><td>${esc(k.expiresAt||'never')}</td><td>${esc(k.lastUsedAt||'never')}</td><td><button class="btn danger small" data-keydel="${k.id}">Revoke</button></td></tr>`).join('')||'<tr><td colspan="7" class="empty">No API keys.</td></tr>';$$('[data-keydel]').forEach(b=>b.onclick=()=>deleteKey(b.dataset.keydel));$$('[data-toggle]').forEach(b=>b.onclick=async()=>{try{await api('PUT','/auth/apikeys/'+b.dataset.toggle,{enabled:b.dataset.enabled!=='true',expiresAt:b.dataset.expires||null});notify('API key status updated');await loadKeys()}catch(e){notify(e.message,true)}})}
+function openKeyForRole(role=''){$('#k_name').value=$('#k_owner').value=$('#k_desc').value=$('#k_expires').value='';if(role)$('#k_role').value=role;$('#keyDialog').showModal()}$('#newKey').onclick=()=>openKeyForRole();$('#createKey').onclick=async()=>{try{let exp=$('#k_expires').value;let r=await api('POST','/auth/apikeys',{name:$('#k_name').value,owner:$('#k_owner').value,description:$('#k_desc').value,roleName:$('#k_role').value,expiresAt:exp?new Date(exp).toISOString():null});$('#keyDialog').close();$('#rawKey').textContent=r.apiKey;$('#secretDialog').showModal();await loadKeys()}catch(e){notify(e.message,true)}};async function deleteKey(id){if(!confirm(`Revoke API key #${id}?`))return;try{await api('DELETE','/auth/apikeys/'+id);notify('API key revoked');await loadKeys()}catch(e){notify(e.message,true)}}$('#copyKey').onclick=async()=>{await navigator.clipboard.writeText($('#rawKey').textContent);notify('Copied to clipboard')};
+async function bootstrap(){try{let s=await api('GET','/admin/session');CSRF=s.csrfToken;sessionStorage.pgdh_csrf=CSRF;await refresh()}catch{$('#loginWall').classList.remove('hidden')}}bootstrap();
+</script></body></html>

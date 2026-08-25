@@ -35,9 +35,13 @@ public enum FunctionReturnType
 
 public sealed class FunctionMetadata
 {
+    public uint Oid { get; set; }
+
     public string Schema { get; set; } = "";
 
     public string Name { get; set; } = "";
+
+    public string Signature { get; set; } = "";
 
     public string Description { get; set; } = "";
 
