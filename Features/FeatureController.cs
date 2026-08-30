@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using PgDataHub.Auth;
 using PgDataHub.Config;
 using PgDataHub.Metadata;
+using System.Diagnostics;
 
 namespace PgDataHub.Features;
 
@@ -54,19 +55,24 @@ public sealed class FeatureController : ControllerBase
         string collectionId,
         CancellationToken cancellationToken)
     {
+        var stage = Stopwatch.StartNew();
         var collection = await _featureService.GetCollectionAsync(collectionId, cancellationToken);
+        RequestTiming.Add(HttpContext, "metadata", stage.Elapsed);
 
         if (collection is null)
         {
             return NotFound(new { error = "Collection not found", collectionId });
         }
 
+        stage.Restart();
         var (authorized, forbidden) = await AuthorizeCollectionAsync(collection, cancellationToken);
+        RequestTiming.Add(HttpContext, "authorize", stage.Elapsed);
         if (forbidden is not null) return forbidden;
         collection = authorized!;
 
         var queryDict = Request.Query.ToDictionary(kv => kv.Key, kv => (string?)kv.Value.ToString());
 
+        stage.Restart();
         FeatureQueryParameters parameters;
         try
         {
@@ -86,12 +92,15 @@ public sealed class FeatureController : ControllerBase
         {
             return BadRequest(new { error = ex.Message });
         }
+        RequestTiming.Add(HttpContext, "query_build", stage.Elapsed);
 
         try
         {
+            stage.Restart();
             var result = await _featureService.ExecuteAsync(
                 query,
                 cancellationToken);
+            RequestTiming.Add(HttpContext, "db", stage.Elapsed);
 
             await using (result)
             {

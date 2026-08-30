@@ -3,6 +3,7 @@ using PgDataHub.Auth;
 using PgDataHub.Config;
 
 namespace PgDataHub.Metadata;
+using System.Diagnostics;
 
 [ApiController]
 [Route("metadata")]
@@ -30,11 +31,14 @@ public sealed class MetadataController : ControllerBase
         Get(
             CancellationToken cancellationToken)
     {
+        var stage = Stopwatch.StartNew();
         var collections = await _metadata.GetCollectionsAsync(cancellationToken);
         var functions = await _metadata.GetFunctionsAsync(cancellationToken);
+        RequestTiming.Add(HttpContext, "metadata", stage.Elapsed);
 
         if (_config.Auth.Enabled)
         {
+            stage.Restart();
             var roles = User.RoleNames();
 
             var visibleCollections = new List<CollectionMetadata>();
@@ -49,6 +53,7 @@ public sealed class MetadataController : ControllerBase
 
             collections = visibleCollections;
             functions = visibleFunctions;
+            RequestTiming.Add(HttpContext, "authorize", stage.Elapsed);
         }
 
         return Ok(

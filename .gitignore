@@ -30,3 +30,8 @@ _scan/
 .security-build*/
 .security-test-bin/
 .security-test-obj/
+.timing-build*/
+.timing-verification/
+.env
+.docker-verification/
+.docker-runtime-test/

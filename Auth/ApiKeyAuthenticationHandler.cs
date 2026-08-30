@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using PgDataHub.Config;
+using System.Diagnostics;
 
 namespace PgDataHub.Auth;
 
@@ -29,36 +30,44 @@ public sealed class ApiKeyAuthenticationHandler
 
     protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
     {
-        if (!_config.Auth.Enabled)
-            return AuthenticateResult.NoResult();
-
-        var presented = Request.Headers[_config.Auth.ApiKey.Header].ToString();
-
-        if (string.IsNullOrWhiteSpace(presented))
+        var timing = Stopwatch.StartNew();
+        try
         {
-            // No credentials: fall back to anonymous role if configured.
-            var defaultRole = _config.Auth.DefaultRole;
-
-            if (string.IsNullOrWhiteSpace(defaultRole))
+            if (!_config.Auth.Enabled)
                 return AuthenticateResult.NoResult();
 
+            var presented = Request.Headers[_config.Auth.ApiKey.Header].ToString();
+
+            if (string.IsNullOrWhiteSpace(presented))
+            {
+                // No credentials: fall back to anonymous role if configured.
+                var defaultRole = _config.Auth.DefaultRole;
+
+                if (string.IsNullOrWhiteSpace(defaultRole))
+                    return AuthenticateResult.NoResult();
+
+                return AuthenticateResult.Success(
+                    BuildTicket("anonymous", defaultRole, PrincipalSource.Anonymous));
+            }
+
+            if (!_config.Auth.ApiKey.Enabled)
+                return AuthenticateResult.NoResult();
+
+            var record = await _auth.ResolveApiKeyAsync(presented, Context.RequestAborted);
+
+            if (record is null)
+                return AuthenticateResult.Fail("Invalid or expired API key.");
+
+            // Best-effort, throttled last-used update; must not block the request.
+            _ = _auth.TouchKeyAsync(record.KeyHash);
+
             return AuthenticateResult.Success(
-                BuildTicket("anonymous", defaultRole, PrincipalSource.Anonymous));
+                BuildTicket(record.Name, record.RoleName, PrincipalSource.ApiKey));
         }
-
-        if (!_config.Auth.ApiKey.Enabled)
-            return AuthenticateResult.NoResult();
-
-        var record = await _auth.ResolveApiKeyAsync(presented, Context.RequestAborted);
-
-        if (record is null)
-            return AuthenticateResult.Fail("Invalid or expired API key.");
-
-        // Best-effort, throttled last-used update; must not block the request.
-        _ = _auth.TouchKeyAsync(record.KeyHash);
-
-        return AuthenticateResult.Success(
-            BuildTicket(record.Name, record.RoleName, PrincipalSource.ApiKey));
+        finally
+        {
+            RequestTiming.Add(Context, "auth", timing.Elapsed);
+        }
     }
 
     private AuthenticationTicket BuildTicket(string name, string role, PrincipalSource source)

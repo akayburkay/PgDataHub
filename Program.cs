@@ -35,8 +35,9 @@ builder.Services.AddDataProtection();
 builder.Services.Configure<KeyManagementOptions>(options =>
     options.XmlRepository = new InMemoryXmlRepository());
 
-var config =
-    PgDataHubConfig.Load("pgdatahub.ini");
+var configPath = Environment.GetEnvironmentVariable("PGDATAHUB_CONFIG_PATH") ?? "pgdatahub.ini";
+var config = PgDataHubConfig.Load(configPath);
+DockerConfigBootstrap.Apply(config);
 
 Db.Initialize(config.Database);
 
@@ -121,6 +122,7 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
+var serverTimingEnabled = builder.Configuration.GetValue("Diagnostics:ServerTiming", false);
 
 app.UseExceptionHandler();
 app.UseStatusCodePages(async statusContext =>
@@ -146,6 +148,16 @@ app.UseStatusCodePages(async statusContext =>
 });
 app.UseResponseCompression();
 app.UseRateLimiter();
+if (serverTimingEnabled) app.Use(async (context, next) =>
+{
+    RequestTiming.Begin(context);
+    context.Response.OnStarting(() =>
+    {
+        context.Response.Headers["Server-Timing"] = RequestTiming.Format(context);
+        return Task.CompletedTask;
+    });
+    await next();
+});
 app.Use(async (context, next) =>
 {
     context.Response.Headers["X-Content-Type-Options"] = "nosniff";

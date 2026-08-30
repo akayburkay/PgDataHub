@@ -2,6 +2,7 @@
 
 ## Table of Contents
 
+- [Installation](#installation)
 - [Configuration Reference](#configuration-reference)
 - [API Reference](#api-reference)
 - [Query Parameters](#query-parameters)
@@ -11,9 +12,15 @@
 
 ---
 
+## Installation
+
+The recommended installation is Docker Compose, which starts PgDataHub and PostGIS together and persists both configuration and database data. See [DOCKER.md](DOCKER.md) for first installation, updates, backups, production security and troubleshooting.
+
+For a local development run, install .NET 10 SDK, configure `pgdatahub.ini`, and run `dotnet run`.
+
 ## Configuration Reference
 
-All configuration is read from `pgdatahub.ini` at startup.
+Configuration is loaded from `pgdatahub.ini` (or `PGDATAHUB_CONFIG_PATH`). Management changes are written atomically and applied to the in-memory authorization/metadata state immediately; a restart is not required.
 
 ### `[database]`
 

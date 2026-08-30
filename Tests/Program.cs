@@ -14,7 +14,8 @@ var tests = new (string Name, Action Run)[]
     ("all matching auth column patterns are merged", AuthPatternsMerge),
     ("any matching auth hide rule wins", AuthHideWins),
     ("metadata SQL handles OIDs, ordinary IN args and duplicate joins", MetadataSqlShape),
-    ("config writer preserves unknown content and writes atomically", ConfigWriterPreservesContent)
+    ("config writer preserves unknown content and writes atomically", ConfigWriterPreservesContent),
+    ("docker bootstrap is idempotent and rotates its admin key", DockerBootstrapRotation)
 };
 
 var failures = 0;
@@ -157,6 +158,34 @@ static void ConfigWriterPreservesContent()
         Assert(!Directory.EnumerateFiles(Path.GetDirectoryName(path)!, $".{Path.GetFileName(path)}.*.tmp").Any(), "temporary file cleanup");
     }
     finally { if (File.Exists(path)) File.Delete(path); }
+}
+
+static void DockerBootstrapRotation()
+{
+    var path = Path.Combine(Path.GetTempPath(), $"pgdatahub-docker-{Guid.NewGuid():N}.ini");
+    var previous = Environment.GetEnvironmentVariable("PGDATAHUB_ADMIN_KEY");
+    try
+    {
+        File.WriteAllText(path, "[database]\ndatabase=db\nuser=user\n");
+        var config = PgDataHubConfig.Load(path);
+
+        Environment.SetEnvironmentVariable("PGDATAHUB_ADMIN_KEY", "first-docker-admin-key");
+        DockerConfigBootstrap.Apply(config);
+        DockerConfigBootstrap.Apply(config);
+        Assert(config.ApiKeys.Count(k => k.Owner == "docker-compose") == 1, "bootstrap must be idempotent");
+
+        var firstHash = config.ApiKeys.Single(k => k.Owner == "docker-compose").Hash;
+        Environment.SetEnvironmentVariable("PGDATAHUB_ADMIN_KEY", "second-docker-admin-key");
+        DockerConfigBootstrap.Apply(config);
+        var dockerKeys = config.ApiKeys.Where(k => k.Owner == "docker-compose").ToList();
+        Assert(dockerKeys.Count == 1, "rotation must remove the previous docker key");
+        Assert(dockerKeys[0].Hash != firstHash, "rotation must install the new key hash");
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable("PGDATAHUB_ADMIN_KEY", previous);
+        if (File.Exists(path)) File.Delete(path);
+    }
 }
 
 static Dictionary<string, string?> Query(params (string Key, string Value)[] values)
