@@ -1,67 +1,62 @@
 # PgDataHub
 
-PostgreSQL tablolarını, view'larını ve fonksiyonlarını kod yazmadan güvenli bir REST API'ye dönüştüren .NET 10 servisi. PostGIS/GeoJSON, canlı metadata, API key/JWT yetkilendirme ve yerleşik yönetim arayüzü içerir.
+PgDataHub is a .NET 10 service that exposes PostgreSQL tables, views, and functions as a secure REST API without application code. It includes PostGIS/GeoJSON support, live metadata, API key/JWT authorization, and a built-in administration console.
 
-## Öne çıkan özellikler
+## Highlights
 
-- **Sıfır uygulama kodu:** `pgdatahub.ini` veya yönetim panelinden yapılandırılır.
-- **PostGIS ve GeoJSON:** Geometry kolonları otomatik `FeatureCollection` olarak sunulur; bbox ve CRS dönüşümü desteklenir.
-- **Güçlü sorgulama:** Filtre, sıralama, kolon seçimi, sayfalama, distinct ve count.
-- **Canlı metadata:** Uygun şema değişiklikleri PostgreSQL `LISTEN/NOTIFY` ile restart gerektirmeden alınır.
-- **Güvenlik:** API key ve JWT, rol bazlı tablo/view/fonksiyon ve kolon yetkileri, güvenli admin oturumu ve CSRF koruması.
-- **Fonksiyonlar:** Parametreli ve overload PostgreSQL fonksiyonları OID/signature ile doğru ayrılır.
-- **Performans:** Metadata cache, bağlantı havuzu, streaming JSON, Brotli/Gzip ve isteğe bağlı `Server-Timing` ölçümleri.
+- **Zero application code:** Configure it through `pgdatahub.ini` or the administration console.
+- **PostGIS and GeoJSON:** Geometry columns are automatically returned as GeoJSON `FeatureCollection` responses, with bbox filtering and CRS transformation.
+- **Rich queries:** Filtering, sorting, column selection, pagination, distinct results, and counts.
+- **Live metadata:** Matching schema changes are detected through PostgreSQL `LISTEN/NOTIFY` without restarting the service.
+- **Security:** API key and JWT authentication, role-based table/view/function and column permissions, secure admin sessions, and CSRF protection.
+- **PostgreSQL functions:** Parameterized and overloaded functions are distinguished by OID and signature.
+- **Performance:** Metadata caching, connection pooling, streaming JSON, compression, and optional `Server-Timing` diagnostics.
 
-## Hızlı kurulum
+## Quick Start
 
-### Docker Compose (önerilen)
+### Docker Compose (recommended)
 
-Gereksinim: Docker Desktop (Windows/macOS) veya Docker Engine + Compose v2 (Linux).
+Requirements: Docker Desktop on Windows/macOS, or Docker Engine with Compose v2 on Linux.
 
 ```bash
 git clone https://github.com/akayburkay/PgDataHub.git
 cd PgDataHub
 cp .env.example .env
-# .env içindeki iki replace-with-... değerini değiştirin
+# Replace both replace-with-... values in .env
 docker compose up -d
 ```
 
-Windows PowerShell'de kopyalama komutu: `Copy-Item .env.example .env`.
+On Windows PowerShell, copy the environment file with `Copy-Item .env.example .env`.
 
-Kurulum tamamlandığında:
+After startup:
 
-- Yönetim paneli: <http://localhost:5270/admin/>
-- Hazır olma kontrolü: <http://localhost:5270/health/ready>
+- Administration console: <http://localhost:5270/admin/>
+- Readiness check: <http://localhost:5270/health/ready>
 
-Yönetim paneline `.env` dosyasındaki `PGDATAHUB_ADMIN_KEY` ile giriş yapın. Compose; PgDataHub ve PostGIS'i kurar, veritabanı hazır olana kadar bekler, verileri named volume'larda saklar ve servisleri otomatik yeniden başlatır.
+Sign in with the `PGDATAHUB_ADMIN_KEY` value from `.env`. Compose starts PgDataHub and PostGIS, waits for PostgreSQL readiness, persists the database and configuration in named volumes, and automatically restarts the services.
 
 ```bash
 docker compose ps
 docker compose logs -f pgdatahub
+curl -H "X-API-Key: YOUR_ADMIN_KEY" http://localhost:5270/metadata
 ```
 
-İlk doğrulama isteği:
+> Never use the example passwords in production. Compose publishes PgDataHub only on `127.0.0.1` by default. Add a TLS-terminating reverse proxy and appropriate network rules before exposing it externally.
 
-```bash
-curl -H "X-API-Key: BURAYA_ADMIN_KEY" http://localhost:5270/metadata
-```
+See the [Docker installation guide](DOCKER.md) for upgrades, backups, production security, and troubleshooting.
 
-> Varsayılan örnek parolaları kullanmayın. Uygulama Compose ile yalnızca `127.0.0.1` üzerinde yayınlanır; internete açarken TLS kullanan bir reverse proxy ve ağ erişim kuralları ekleyin.
-
-Ayrıntılı kurulum, güncelleme, yedekleme ve sorun giderme için [Docker kurulum rehberine](DOCKER.md) bakın.
-
-### Yerel .NET
+### Local .NET
 
 ```bash
 git clone https://github.com/akayburkay/PgDataHub.git
 cd PgDataHub
-# pgdatahub.ini içindeki PostgreSQL bağlantısını düzenleyin
+# Configure the PostgreSQL connection in pgdatahub.ini
 dotnet run
 ```
 
-Gereksinimler: .NET 10 SDK ve erişilebilir PostgreSQL 14+ (geometry için PostGIS).
+Requirements: .NET 10 SDK and an accessible PostgreSQL 14+ server. PostGIS is required for geometry support.
 
-## Temel yapılandırma (`pgdatahub.ini`)
+## Basic Configuration (`pgdatahub.ini`)
 
 ```ini
 [database]
@@ -84,41 +79,40 @@ include=*
 defaultTimeout=30
 maxRows=10000
 
-# Per-table overrides
 [public.buildings.feature]
 hide=internal_notes
 ```
 
-Yönetim panelinden kaydedilen auth/config değişiklikleri dosyaya atomik olarak yazılır ve restart gerektirmeden uygulanır. Docker kurulumunda config, `pgdatahub_config` volume'unda tutulur.
+Changes saved through the administration console are written atomically and applied without a restart. In Docker installations, configuration is stored in the `pgdatahub_config` volume.
 
-## API özeti
+## API Overview
 
-| Endpoint | Açıklama |
+| Endpoint | Description |
 |---|---|
-| `GET /metadata` | Yetkili tablo, view ve fonksiyon metadata'sı |
-| `GET /collections/{schema}.{table}/items` | Kayıt/feature sorgulama |
-| `GET /collections/{schema}.{table}/items/{id}` | Primary key ile tek kayıt |
-| `GET /collections/{schema}.{table}/queryables` | Sorgulanabilir kolon şeması |
-| `GET /functions` | Yetkili fonksiyon listesi |
-| `GET /functions/{schema}.{name}/items` | Fonksiyon çalıştırma |
-| `GET /health/live` | Uygulama yaşam kontrolü |
-| `GET /health/ready` | Uygulama + veritabanı hazır olma kontrolü |
+| `GET /metadata` | Metadata for authorized tables, views, and functions |
+| `GET /collections/{schema}.{table}/items` | Query rows or features |
+| `GET /collections/{schema}.{table}/items/{id}` | Get one row by primary key |
+| `GET /collections/{schema}.{table}/queryables` | Queryable column schema |
+| `GET /functions` | List authorized functions |
+| `GET /functions/{schema}.{name}/items` | Execute a function |
+| `GET /health/live` | Application liveness check |
+| `GET /health/ready` | Application and database readiness check |
 
-Tüm parametreler, auth modeli, örnek istekler ve mimari için [genel dokümantasyona](DOCS.md) bakın.
+See the [full documentation](DOCS.md) for all parameters, the authorization model, examples, and architecture.
 
-## Test
+## Testing
 
 ```bash
 dotnet run --project Tests/PgDataHub.Tests.csproj
 powershell -ExecutionPolicy Bypass -File Tests/e2e.ps1
 ```
 
-Yük testi için [k6](https://grafana.com/docs/k6/latest/set-up/install-k6/) kurulduktan sonra:
+For load testing, install [k6](https://grafana.com/docs/k6/latest/set-up/install-k6/) and run:
 
 ```bash
 k6 run -e BASE_URL=http://localhost:5270 -e API_KEY=your-key -e VUS=100 Tests/performance-smoke.js
 ```
 
-## Lisans
+## License
 
 MIT

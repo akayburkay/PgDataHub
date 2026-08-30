@@ -1,21 +1,19 @@
-# Docker ile kurulum
+# Docker Installation
 
-Bu kurulum PgDataHub ile PostGIS'i birlikte ayağa kaldırır. Uygulama config'i ve PostgreSQL verisi named volume'larda kalıcıdır.
+This setup starts PgDataHub and PostGIS together. Application configuration and PostgreSQL data are persisted in named volumes.
 
-## Gereksinimler
+## Requirements
 
-- Windows/macOS: güncel Docker Desktop
-- Linux: Docker Engine ve Docker Compose v2
-- En az 2 GB boş RAM ve image'lar için yaklaşık 2 GB disk
-
-Doğrulama:
+- Windows/macOS: a current Docker Desktop installation
+- Linux: Docker Engine and Docker Compose v2
+- At least 2 GB of available memory and approximately 2 GB of disk space for images
 
 ```bash
 docker version
 docker compose version
 ```
 
-## İlk kurulum
+## First Installation
 
 ```bash
 git clone https://github.com/akayburkay/PgDataHub.git
@@ -23,62 +21,56 @@ cd PgDataHub
 cp .env.example .env
 ```
 
-Windows PowerShell kullanıyorsanız son komut yerine:
+On Windows PowerShell, use `Copy-Item .env.example .env` instead.
 
-```powershell
-Copy-Item .env.example .env
-```
-
-`.env` dosyasında en az şu iki değeri benzersiz ve güçlü değerlerle değiştirin:
+Set unique, strong values for at least these entries in `.env`:
 
 ```dotenv
-PGDATAHUB_DB_PASSWORD=uzun-ve-rastgele-bir-veritabani-parolasi
-PGDATAHUB_ADMIN_KEY=en-az-16-karakterlik-uzun-rastgele-admin-anahtari
+PGDATAHUB_DB_PASSWORD=a-long-random-database-password
+PGDATAHUB_ADMIN_KEY=a-long-random-admin-key-at-least-16-characters
 ```
 
-Ardından:
+Start the stack:
 
 ```bash
 docker compose up -d --build
 docker compose ps
 ```
 
-Her iki servis de `healthy` olduğunda yönetim paneli <http://localhost:5270/admin/> adresindedir. Giriş anahtarı `.env` içindeki `PGDATAHUB_ADMIN_KEY` değeridir.
+When both services report `healthy`, open <http://localhost:5270/admin/> and sign in with the `PGDATAHUB_ADMIN_KEY` value.
 
-## Kurulumu doğrulama
+## Verify the Installation
 
 ```bash
 curl http://localhost:5270/health/live
 curl http://localhost:5270/health/ready
-curl -H "X-API-Key: BURAYA_ADMIN_KEY" http://localhost:5270/metadata
+curl -H "X-API-Key: YOUR_ADMIN_KEY" http://localhost:5270/metadata
 ```
 
-Beklenen health yanıtları sırasıyla `ok` ve `ready` durumudur. `/metadata` endpoint'i kimlik bilgisi olmadan `401`, geçerli admin anahtarıyla `200` döner.
-
-Loglar:
+The health endpoints should report `ok` and `ready`. `/metadata` should return `401` without credentials and `200` with a valid admin key.
 
 ```bash
 docker compose logs -f pgdatahub
 docker compose logs -f db
 ```
 
-## Yapılandırma ve kalıcılık
+## Configuration and Persistence
 
-- PostgreSQL verisi: `pgdatahub_postgres` volume'u
-- Uygulama config'i: `pgdatahub_config` volume'u
-- İlk açılışta güvenli şablon config volume'a kopyalanır.
-- DB bağlantısı Compose environment değerlerinden uygulanır.
-- Admin anahtarının yalnızca SHA-256 hash'i config'e yazılır; açık anahtar saklanmaz.
-- `.env` içindeki admin anahtarı değiştirilip servis yeniden oluşturulursa Docker tarafından oluşturulan admin key güvenli biçimde döndürülür.
-- Yönetim panelinden yapılan değişiklikler kalıcı config'e yazılır ve anında uygulanır.
+- PostgreSQL data is stored in the `pgdatahub_postgres` volume.
+- Application configuration is stored in the `pgdatahub_config` volume.
+- On first startup, a secure template is copied into the configuration volume.
+- Database connection values are applied from the Compose environment.
+- Only the SHA-256 hash of the admin key is stored; the raw key is never written to configuration.
+- Changing the admin key in `.env` and recreating the service safely rotates the Docker-managed key.
+- Administration console changes are persisted and applied immediately.
 
-Uygulama varsayılan olarak yalnızca `127.0.0.1:5270` üzerinde erişilebilir. Portu değiştirmek için `.env` içindeki `PGDATAHUB_PORT` değerini değiştirip `docker compose up -d` çalıştırın.
+PgDataHub is published only on `127.0.0.1:5270` by default. Change `PGDATAHUB_PORT` in `.env` and run `docker compose up -d` to use another port.
 
-## Mevcut PostgreSQL kullanma
+## Use an Existing PostgreSQL Server
 
-Varsayılan Compose kendi PostGIS servisini oluşturur. Harici veritabanı kullanmak için `docker-compose.yml` içindeki `PGDATAHUB_DB_*` environment değerlerini hedef sunucuya göre ayarlayın ve `depends_on: db` bağımlılığını kaldıran ayrı bir Compose override kullanın. Veritabanı kullanıcısına yalnızca yayınlanacak şema ve nesneler için gereken en düşük izinleri verin.
+The default Compose file creates its own PostGIS service. For an external database, set the `PGDATAHUB_DB_*` values to the target server and use a Compose override that removes `depends_on: db`. Grant the database user only the minimum permissions required for the schemas and objects being exposed.
 
-## Güncelleme
+## Upgrade
 
 ```bash
 git pull
@@ -86,45 +78,45 @@ docker compose up -d --build
 docker compose ps
 ```
 
-Named volume'lar korunduğu için config ve veritabanı verisi kalır. Güncellemeden önce yedek alınması önerilir.
+Named volumes are preserved. Take a backup before production upgrades.
 
-## Yedekleme
+## Backup
 
-PostgreSQL yedeği:
+Create a PostgreSQL dump:
 
 ```bash
 docker compose exec -T db pg_dump -U pgdatahub -d pgdatahub -Fc > pgdatahub.dump
 ```
 
-Config'i görüntüleme/yedekleme:
+Export application configuration:
 
 ```bash
 docker compose exec -T pgdatahub sh -c "cat /data/pgdatahub.ini" > pgdatahub.docker.ini
 ```
 
-Yedek dosyaları API key hash'leri ve veritabanı içeriği taşıyabileceği için güvenli saklayın.
+Backups may contain database data and API key hashes. Store them securely.
 
-## Durdurma ve kaldırma
+## Stop or Remove the Stack
 
-Servisleri durdurmak, verileri korumak için:
+Stop services while preserving data:
 
 ```bash
 docker compose down
 ```
 
-`docker compose down -v` PostgreSQL ve config volume'larını da kalıcı olarak siler. Yalnızca verileri gerçekten sıfırlamak istediğinizde kullanın.
+`docker compose down -v` permanently deletes both PostgreSQL and configuration volumes. Use it only when intentionally erasing all Docker-managed data.
 
-## Güvenli yayınlama kontrol listesi
+## Production Security Checklist
 
-- `.env` örnek değerlerini mutlaka değiştirin ve dosyayı Git'e eklemeyin.
-- Dış erişimde HTTPS terminasyonu yapan Caddy, Traefik veya Nginx gibi bir reverse proxy kullanın.
-- Veritabanı portunu internete yayınlamayın; mevcut Compose zaten DB portu açmaz.
-- Admin panelini güvenilir ağ/VPN ile sınırlayın.
-- Admin dışı istemcilere ayrı API key ve en az yetkili rol verin.
-- API key'leri periyodik döndürün; ham anahtar yalnızca oluşturulurken gösterilir.
+- Replace every example value in `.env`, and never commit that file.
+- Use a TLS-terminating reverse proxy such as Caddy, Traefik, or Nginx.
+- Do not publish the database port; the default Compose file does not expose it.
+- Restrict the administration console to a trusted network or VPN.
+- Give non-admin clients separate API keys and least-privilege roles.
+- Rotate API keys periodically. Raw keys are displayed only once when created.
 
-## Sorun giderme
+## Troubleshooting
 
-`docker compose ps` içinde DB sağlıksızsa önce `docker compose logs db` çıktısını inceleyin. Eski bir volume farklı kullanıcı/parola ile oluşturulduysa `.env` değişikliği mevcut PostgreSQL kullanıcısını geriye dönük değiştirmez.
+If the database is unhealthy in `docker compose ps`, inspect `docker compose logs db`. Changing `.env` does not retroactively change PostgreSQL credentials inside an already initialized volume.
 
-Docker Desktop hiç başlayamıyorsa veya `engine.sock`, `dockerInference` gibi yerel socket hataları veriyorsa sorun Compose projesinden önce, bilgisayardaki Docker Desktop kurulumundadır. Docker Desktop'ı onarın/sıfırlayın veya resmi tanılama aracını çalıştırın; sağlıklı bir Docker kurulumunda proje ek bir yerel bağımlılık olmadan `docker compose up -d` ile açılır.
+If Docker Desktop cannot start or reports local socket errors involving paths such as `engine.sock` or `dockerInference`, the failure occurs before Compose or PgDataHub runs. Repair or reset Docker Desktop, or use its official diagnostics. On a healthy Docker installation, this project starts with `docker compose up -d` and requires no additional local dependency.
