@@ -5,7 +5,7 @@ services:
     environment:
       POSTGRES_DB: ${PGDATAHUB_DB_NAME:-pgdatahub}
       POSTGRES_USER: ${PGDATAHUB_DB_USER:-pgdatahub}
-      POSTGRES_PASSWORD: ${PGDATAHUB_DB_PASSWORD:-change-this-db-password}
+      POSTGRES_PASSWORD: ${PGDATAHUB_DB_PASSWORD:?Set PGDATAHUB_DB_PASSWORD in .env}
     volumes:
       - pgdatahub_postgres:/var/lib/postgresql/data
     healthcheck:
@@ -28,8 +28,8 @@ services:
       PGDATAHUB_DB_PORT: 5432
       PGDATAHUB_DB_NAME: ${PGDATAHUB_DB_NAME:-pgdatahub}
       PGDATAHUB_DB_USER: ${PGDATAHUB_DB_USER:-pgdatahub}
-      PGDATAHUB_DB_PASSWORD: ${PGDATAHUB_DB_PASSWORD:-change-this-db-password}
-      PGDATAHUB_ADMIN_KEY: ${PGDATAHUB_ADMIN_KEY:-change-this-admin-key}
+      PGDATAHUB_DB_PASSWORD: ${PGDATAHUB_DB_PASSWORD:?Set PGDATAHUB_DB_PASSWORD in .env}
+      PGDATAHUB_ADMIN_KEY: ${PGDATAHUB_ADMIN_KEY:?Set PGDATAHUB_ADMIN_KEY in .env}
     ports:
       - "127.0.0.1:${PGDATAHUB_PORT:-5270}:8080"
     volumes:

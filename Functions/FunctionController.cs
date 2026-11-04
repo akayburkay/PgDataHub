@@ -86,6 +86,7 @@ public sealed class FunctionController : ControllerBase
     }
 
     [HttpGet("{schema}.{name}/items")]
+    [HttpPost("{schema}.{name}/items")]
     public async Task<IActionResult> GetItems(
         string schema,
         string name,
@@ -96,14 +97,10 @@ public sealed class FunctionController : ControllerBase
 
         try
         {
-            await _functions.ExecuteAsync(
-                schema,
-                name,
-                Request.Query,
-                Response,
-                ct);
-
-            return new EmptyResult();
+            var function = await _functions.GetFunctionAsync(schema, name, ct);
+            if (function is null)
+                return NotFound(new { error = "Function not found or its name is ambiguous; use the function OID endpoint for overloads." });
+            return await ExecuteItemsAsync(function, ct);
         }
         catch (KeyNotFoundException ex)
         {
@@ -120,6 +117,7 @@ public sealed class FunctionController : ControllerBase
     }
 
     [HttpGet("{oid:long}/items")]
+    [HttpPost("{oid:long}/items")]
     public async Task<IActionResult> GetItemsByOid(uint oid, CancellationToken ct)
     {
         var function = await _functions.GetFunctionAsync(oid, ct);
@@ -130,8 +128,7 @@ public sealed class FunctionController : ControllerBase
 
         try
         {
-            await _functions.ExecuteAsync(oid, Request.Query, Response, ct);
-            return new EmptyResult();
+            return await ExecuteItemsAsync(function, ct);
         }
         catch (KeyNotFoundException ex)
         {
@@ -145,5 +142,28 @@ public sealed class FunctionController : ControllerBase
         {
             return BadRequest(new { error = "One or more function parameter values are invalid." });
         }
+    }
+
+    private async Task<IActionResult> ExecuteItemsAsync(FunctionMetadata function, CancellationToken ct)
+    {
+        var post = HttpMethods.IsPost(Request.Method);
+        if (function.IsVolatile)
+        {
+            if (!post)
+            {
+                Response.Headers.Allow = "POST";
+                return StatusCode(StatusCodes.Status405MethodNotAllowed,
+                    new { error = "VOLATILE functions require POST and a separate execution permission." });
+            }
+            // Public/default roles must never acquire write access implicitly.
+            if (!_config.Auth.Enabled || User.Identity?.IsAuthenticated != true ||
+                User.HasClaim("pgdatahub:source", nameof(PrincipalSource.Anonymous)) ||
+                !await _auth.CanExecuteVolatileFunctionAsync(User.RoleNames(), function.Schema, function.Name, ct))
+                return StatusCode(StatusCodes.Status403Forbidden,
+                    new { error = "Explicit volatile function execution permission is required." });
+        }
+
+        await _functions.ExecuteAsync(function, Request.Query, Response, ct, allowVolatile: post && function.IsVolatile);
+        return new EmptyResult();
     }
 }

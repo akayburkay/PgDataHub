@@ -200,6 +200,10 @@ public sealed class PgDataHubConfig
                 function.Exclude = Split(value);
                 break;
 
+            case "volatileinclude":
+                function.VolatileInclude = Split(value);
+                break;
+
             
 
             case "defaulttimeout":
@@ -348,6 +352,18 @@ public sealed class PgDataHubConfig
             case "functions.deny":
                 role.FunctionsDeny = Split(value);
                 return;
+            case "functions.volatile.allow":
+                role.FunctionsVolatileAllow = Split(value);
+                return;
+            case "functions.volatile.deny":
+                role.FunctionsVolatileDeny = Split(value);
+                return;
+            case "rows":
+                role.RowRules = System.Text.Json.JsonSerializer.Deserialize<List<PgDataHub.Auth.RowRule>>(value,
+                    new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+                    ?? throw new FormatException("Row rules must be a JSON array.");
+                PgDataHub.Auth.RowRule.Validate(role.RowRules);
+                return;
         }
 
         // columns.<pattern>.allow | columns.<pattern>.hide
@@ -480,6 +496,9 @@ public sealed class AuthRoleConfig
     public List<string> CollectionsDeny { get; set; } = [];
     public List<string> FunctionsAllow { get; set; } = [];
     public List<string> FunctionsDeny { get; set; } = [];
+    public List<string> FunctionsVolatileAllow { get; set; } = [];
+    public List<string> FunctionsVolatileDeny { get; set; } = [];
+    public List<PgDataHub.Auth.RowRule> RowRules { get; set; } = [];
 
     /// <summary>Per-pattern column rules, keyed by collection glob pattern.</summary>
     public Dictionary<string, AuthColumnRuleConfig> ColumnRules { get; set; }
@@ -578,6 +597,9 @@ public sealed class FunctionConfig
     public List<string> Include { get; set; } = [];
 
     public List<string> Exclude { get; set; } = [];
+
+    /// <summary>Explicit opt-in for VOLATILE functions; execution also requires a separate role permission.</summary>
+    public List<string> VolatileInclude { get; set; } = [];
 
 
     public int DefaultTimeout { get; set; } = 30;

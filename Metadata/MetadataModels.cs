@@ -15,6 +15,10 @@ public sealed class CollectionMetadata
     public string? PrimaryKey { get; set; }
 
     public List<ColumnMetadata> Columns { get; set; } = [];
+
+    internal IReadOnlyList<ColumnMetadata>? PolicyColumns { get; set; }
+    internal IReadOnlyList<IReadOnlyList<PgDataHub.Features.PropertyFilter>>? RowFilters { get; set; }
+    internal CollectionMetadata Copy() => (CollectionMetadata)MemberwiseClone();
 }
 
 public sealed class ColumnMetadata
@@ -47,10 +51,16 @@ public sealed class FunctionMetadata
 
     public FunctionReturnType ReturnType { get; set; }
 
+    public FunctionVolatility Volatility { get; set; } = FunctionVolatility.Volatile;
+
+    public bool IsVolatile => Volatility == FunctionVolatility.Volatile;
+
     public List<FunctionParameterMetadata> Parameters { get; set; } = [];
 
     public List<FunctionColumnMetadata> Columns { get; set; } = [];
 }
+
+public enum FunctionVolatility { Volatile, Stable, Immutable }
 
 public sealed class FunctionParameterMetadata
 {

@@ -55,6 +55,7 @@ Configuration is loaded from `pgdatahub.ini` (or `PGDATAHUB_CONFIG_PATH`). Manag
 |---|---|---|
 | `include` | `*` | Functions to expose |
 | `exclude` | — | Functions to hide |
+| `volatileInclude` | empty | Explicit opt-in globs for VOLATILE functions; `include`/`exclude` still apply |
 | `defaultTimeout` | `30` | Execution timeout (seconds) |
 | `maxRows` | `10000` | Max rows for rowset functions |
 
@@ -75,6 +76,25 @@ hide=salary, ssn
 ## API Reference
 
 Collection IDs follow the format `schema.table` (e.g. `public.cities`).
+
+### OGC discovery and dynamic OpenAPI
+
+| Endpoint | Description |
+|---|---|
+| `GET /` | Public landing page with `data`, `conformance`, `service-desc` and `service-doc` links |
+| `GET /conformance` | Public declaration of the implemented Core/GeoJSON/OpenAPI profile |
+| `GET /collections` | Collections visible to the caller, with `id`, `itemType` and resource links |
+| `GET /collections/{id}` | One authorized collection description |
+| `GET /api` or `/openapi.json` | OpenAPI 3.0 document generated from current authorized metadata |
+| `GET /swagger/` | Swagger UI, available in Production as well as Development |
+
+Connect an OGC API – Features client using the API root URL and configure its API key header or JWT credentials. Landing/conformance documents contain no protected metadata; collection discovery and feature access retain API authentication. This implements the discovery, GeoJSON and paging contract from [OGC API – Features Part 1](https://docs.ogc.org/is/17-069r4/17-069r4.html). An external OGC certification suite and desktop QGIS/ArcGIS interoperability have not been run. HTML/GML encodings and the full Part 2 CRS conformance class are not advertised.
+
+`f=json` and `f=geojson` are accepted on feature resources (both return GeoJSON); metadata uses `f=json`. Unsupported `f` or incompatible `Accept` returns `406`. Coordinates default to longitude/latitude WGS84 (CRS84), independent of the storage SRID. Explicit `crs` is supported on both items and individual features; `Content-Crs` identifies the output. Queryables use `application/schema+json`.
+
+Items include `numberReturned`, `links` and, with `count=true`, `numberMatched` when available. Follow `links[rel=next].href`; it preserves filters, format and CRS and uses the effective capped page size. The last page has no next link. Paging reads at most one extra row and does not issue a count query by default. Discovery reads cached metadata and does not run full-table extent scans.
+
+The dynamic specification includes concrete collection/item/queryable paths, column types, filters, all 15 analysis operations and authorized function OID paths. It omits forbidden collections and hidden columns. The specification requires API authentication or a valid existing admin session; sign in at `/admin/` before opening Swagger in a browser. It is generated per caller and is marked `private, no-store`. `/swagger/v1/swagger.json` is an alias for the same protected document.
 
 ### `GET /metadata`
 
@@ -106,7 +126,7 @@ Returns all collections and functions with their column/parameter metadata.
 
 ### `GET /collections/{schema}.{table}/items`
 
-Returns rows as a `FeatureCollection` (spatial) or `{ "items": [...] }` (non-spatial).
+Returns a GeoJSON `FeatureCollection`. Non-spatial collections have null feature geometries. A visible primary key is also emitted as the top-level feature `id`.
 
 ```http
 GET /collections/public.cities/items?limit=10&bbox=28.5,40.8,29.5,41.2
@@ -118,10 +138,13 @@ GET /collections/public.cities/items?limit=10&bbox=28.5,40.8,29.5,41.2
   "features": [
     {
       "type": "Feature",
+      "id": 1,
       "geometry": { "type": "Point", "coordinates": [28.97, 41.01] },
       "properties": { "id": 1, "name": "Istanbul" }
     }
-  ]
+  ],
+  "numberReturned": 1,
+  "links": [{ "rel": "self", "type": "application/geo+json", "href": "https://api.example/collections/public.cities/items?limit=10" }]
 }
 ```
 
@@ -129,7 +152,7 @@ GET /collections/public.cities/items?limit=10&bbox=28.5,40.8,29.5,41.2
 
 ### `GET /collections/{schema}.{table}/items/{id}`
 
-Returns a single feature by primary key. Returns `404` if not found, `400` if the collection has no primary key.
+Returns one GeoJSON `Feature` by primary key, rather than a FeatureCollection wrapper. Returns `404` for absent or row-restricted records and `400` when the collection has no visible single-column primary key. This and the unified items response replace the earlier single-item FeatureCollection/non-spatial items wrappers.
 
 ---
 
@@ -156,7 +179,10 @@ Returns the JSON Schema for all queryable columns.
 |---|---|
 | `GET /functions` | List all exposed functions |
 | `GET /functions/{schema}.{name}` | Function metadata |
-| `GET /functions/{schema}.{name}/items?p1=v1` | Execute function |
+| `GET /functions/{schema}.{name}/items?p1=v1` | Execute a STABLE/IMMUTABLE function |
+| `POST /functions/{schema}.{name}/items?p1=v1` | Execute a function; VOLATILE requires explicit opt-in and write permission |
+
+The same rules apply to `/functions/{oid}/items`. A VOLATILE function is hidden by default, even with `include=*`. Opt in with `[function] volatileInclude=public.write_*`, then grant both `functions.allow=public.write_*` and `functions.volatile.allow=public.write_*` in the caller's `[role.NAME]` section. `functions.volatile.deny` overrides a matching write allow. Neither admin roles nor `functions.allow=*` implicitly grant write permission. VOLATILE execution requires authentication to be enabled and an API key/JWT caller; the default anonymous role cannot execute writes. Parameters remain in the query string for POST. GET returns `405` and `Allow: POST` for exposed VOLATILE functions without invoking them. STABLE/IMMUTABLE execution runs in a read-only PostgreSQL transaction, protecting against stale volatility metadata too.
 
 All `IN` parameters are required. Missing parameters return `400 Bad Request`.
 
@@ -169,6 +195,40 @@ All `IN` parameters are required. Missing parameters return `400 Bad Request`.
 | `json` / `jsonb` | Raw JSON value |
 | `ARRAY` | JSON array |
 | Scalar (`int`, `text`, …) | `{ "value": ... }` |
+
+### Spatial analysis
+
+`GET /analysis/operations` lists 15 read-only operations. Use `POST /collections/{id}/analysis/{operation}` with a JSON body (`{}` for operations needing no operands). Collection, column and row rules apply before results and counts are produced. Query parameters support the same limits, property filters, bbox, select and ordering as items. No geometry or schema changes are written to PostgreSQL.
+
+| Operation | Body fields | Result |
+|---|---|---|
+| `buffer` | `distance` | Buffered geometry; negative values shrink polygons |
+| `centroid` | — | Centroid geometry |
+| `envelope` | — | Bounding geometry in the working CRS |
+| `convex-hull` | — | Convex hull |
+| `boundary` | — | Geometry boundary |
+| `simplify` | `tolerance` (nonnegative) | Topology-preserving simplification |
+| `transform` | `targetCrsSrid` | Reprojected geometry |
+| `intersection` | `geometry` | Intersection per feature |
+| `union` | `geometry` | Pairwise union per feature, without dissolving the collection |
+| `difference` | `geometry` | Input geometry subtracted from each feature |
+| `area` | — | `properties.analysisValue`, in squared working CRS units |
+| `length` | — | `properties.analysisValue`, in working CRS units (line length) |
+| `distance` | `geometry` | `properties.analysisValue`, in working CRS units |
+| `intersects` | `geometry` | Matching features with boolean `analysisValue` |
+| `dwithin` | `geometry`, `distance` (nonnegative) | Features within distance, with boolean `analysisValue` |
+
+`geometry` must be a GeoJSON Geometry, not a Feature/FeatureCollection. `inputCrsSrid` defaults to `4326`. `workingCrsSrid` defaults to the stored collection SRID; set a suitable projected CRS for metric measurements. Geometry distances use CRS units, so measurements in EPSG:4326 are in degrees, and areas in square degrees; see [PostGIS ST_Buffer](https://postgis.net/docs/ST_Buffer.html). `crs` sets response coordinates independently of measurement units. `transform` defaults the response to `targetCrsSrid`; other operations default to CRS84.
+
+```http
+POST /collections/public.roads/analysis/dwithin?limit=25
+Content-Type: application/json
+X-API-Key: YOUR_KEY
+
+{"geometry":{"type":"Point","coordinates":[29,41]},"inputCrsSrid":4326,"distance":100,"workingCrsSrid":32635}
+```
+
+Operands are parameterized and materialized once per query. `intersects` and `dwithin` can use the existing source spatial index when the working CRS equals the storage CRS; transforming the indexed column may require a functional index, so prefer transforming the operand to the source CRS when possible. Analysis responses are bounded pages; repeat POST with `offset` and the same body to continue (no GET next link is advertised for POST bodies). Large geometries remain subject to the existing 1 MB request limit and database command timeout. Analysis never performs an unbounded collection dissolve.
 
 ---
 
@@ -184,11 +244,27 @@ Applies to all `GET /collections/.../items` endpoints.
 | `orderby` | list | Sort order. Prefix `-` for DESC, `+` or none for ASC | `orderby=-pop,name` |
 | `distinct` | boolean | Remove duplicate rows | `distinct=true` |
 | `count` | boolean | Include total count as `__total_count` | `count=true` |
-| `bbox` | 4 numbers | Spatial bounding box `minx,miny,maxx,maxy` | `bbox=28,40,30,42` |
+| `f` | string | JSON/GeoJSON feature representation | `f=geojson` |
+| `bbox` | 4 or 6 numbers | Spatial bounding box `minx,miny,[minz],maxx,maxy,[maxz]`; longitude may wrap across the antimeridian | `bbox=28,40,30,42` |
+| `datetime` | string | RFC3339 instant or closed/half-open interval | `datetime=2026-01-01T00:00:00Z/..` |
 | `bbox-crs` | SRID | CRS of the bbox coordinates (default: `4326`) | `bbox-crs=EPSG:3857` |
 | `crs` | SRID | Target CRS for response geometries | `crs=EPSG:3857` |
 
 CRS values are accepted as `4326`, `EPSG:4326`, or `http://www.opengis.net/def/crs/EPSG/0/4326`.
+
+`CRS84`, `CRS84h` and their OGC URIs are also recognized. Six-coordinate bboxes include a vertical range; features without a spatial geometry still match a bbox. Temporal filtering uses the first visible `date` or `timestamp` column in metadata order, with inclusive bounds and UTC comparisons (timestamps without a timezone are treated as UTC). An instant matches the whole day for a `date` column. Null temporal values and collections without a visible temporal property match valid datetime filters. Invalid or reversed intervals return `400`.
+
+When a visible single-column primary key (or discovered unique key) is available, results default to that key in ascending order. Explicit `orderby` adds the key as a final tie breaker unless already present. This also works when `select` omits the key. For `distinct=true` with a projection that omits the key, the projected values determine the default order, preserving deduplication. Collections with no visible discovered key need an explicit unique `orderby` for deterministic pagination. Concurrent inserts/deletes can still shift offset pages.
+
+### Browser access and reverse proxies
+
+CORS defaults to any origin for GET/HEAD/OPTIONS, accepts API key/Authorization headers and does not allow browser credentials. Configure `Cors__AllowedOrigins__0=https://maps.example.com` (and subsequent numbered entries) to restrict origins and enable other methods, including POST, from those origins. These settings use ASP.NET configuration/environment variables and require a restart.
+
+Forwarded headers run before rate limiting and authentication. Loopback proxies are trusted by default. Add the actual proxy IP using `ReverseProxy__KnownProxies__0=172.30.0.2`, or a dedicated proxy CIDR using `ReverseProxy__KnownNetworks__0=172.30.0.0/24`. `ReverseProxy__ForwardLimit` defaults to `1`. Untrusted peers cannot change the client address with `X-Forwarded-For`. The proxy should set `X-Forwarded-For` and `X-Forwarded-Proto`.
+
+### Metadata refresh
+
+The listener continues LISTEN when event trigger installation is unavailable (for example, a managed PostgreSQL account without superuser privileges). Installation is transactional; permission failures leave no orphan notify function. An existing trigger is reused without replacing its function. Periodic refresh runs every 60 seconds, including as a fallback for missed notifications. Set `Metadata__PollIntervalSeconds` to change the interval. DDL notifications are coalesced in a 500 ms window (`Metadata__DebounceMilliseconds`) with one refresh worker and at most one pending refresh, so migrations do not queue a reload per statement. These environment settings require a restart.
 
 ---
 
@@ -286,6 +362,30 @@ columns.public.cities.allow=
 | `collections.deny` / `functions.deny` | Glob blacklist; **deny wins** over allow |
 | `columns.<pattern>.allow` | Column whitelist for that collection pattern (empty = all) |
 | `columns.<pattern>.hide` | Columns to drop from responses |
+| `rows` | JSON array of structured collection row rules; managed visually in the admin role editor |
+
+### Row authorization without database policy changes
+
+In **Roles & access → Edit role → Row access rules**, select a collection/pattern, column and operator. Choose a fixed value or a JWT claim name, then add more AND conditions as needed. Collection/column pickers use the existing metadata lookup. Saving writes the rules to the INI and applies them immediately; no PostgreSQL roles, policies or migrations are installed.
+
+The role management API accepts the same structured rules:
+
+```json
+{
+  "collectionsAllow": ["public.orders"],
+  "columnRules": [{"pattern":"public.orders","hide":["tenant_id"]}],
+  "rowRules": [{
+    "pattern": "public.orders",
+    "conditions": [{"column":"tenant_id","operator":"eq","claim":"tenant_id","values":[]}]
+  }]
+}
+```
+
+For API key roles, use a fixed `values:["42"]` instead of `claim`. Allowed operators are `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `in`, `notIn`, `between`, `isNull` and `isNotNull`. Claim conditions use `eq`/`in`; multiple values of a verified JWT claim form an IN list. Missing claims, unknown policy columns and invalid typed values grant no rows for that role. Geometry columns cannot be row-rule operands.
+
+All matching row rules within a role are ANDed; grants from different collection-granting roles are ORed. A granting role without a matching row rule grants all rows. A role without collection access contributes no row grant, and collection deny rules still override every allow. Hidden tenant columns can constrain rows without being exposed or made available as user filters. SQL values remain parameters; raw SQL predicates are not accepted.
+
+Policies apply in SQL to collection items, single-item lookups, counts, next-page detection and spatial analyses. They do not rewrite opaque PostgreSQL function bodies; function permissions remain separate, so only grant functions whose own behavior is appropriate for the role. Direct database access is outside these API policies. Disabling authentication disables role restrictions.
 
 **API keys** — one `[apikey.<id>]` section each; only the SHA-256 **hash** is stored:
 
@@ -305,17 +405,19 @@ lastUsed=
 
 **Decision rules:**
 - Access is granted if any matching `allow` exists and no matching `deny` does.
-- Column rules merge across the caller's roles: union of allows, intersection of hides
-  (most permissive), then layered on top of per-table `[schema.table.feature]` overrides.
+- Column rules merge across the caller's roles: union of allows and hides; a hidden
+  column stays hidden, layered on top of per-table `[schema.table.feature]` overrides.
 - `/metadata` and `/functions` only list resources the caller may see; hidden columns are
   stripped from `/metadata`, `/queryables`, `/items` and `/items/{id}`.
 
 ### Admin UI
 
+The administration console supports **Türkçe / English**. Choose the language on the sign-in page, sidebar or any dialog. The selection is saved in this browser; the first visit follows the browser's preferred supported language. Switching is immediate and preserves open form drafts, row conditions and lookup selections. Labels, help text, notifications, validation messages and date/number presentation are localized. Database identifiers, role names, user descriptions and API payload values remain unchanged. Translation runs only when UI fragments are created or the language changes; it adds no API/database requests.
+
 Open **`/admin/`** in a browser, paste an admin API key, and manage roles and keys:
 
 - **API Keys** — list, create (raw key shown **once**), delete.
-- **Roles** — list, create/edit (allow/deny globs + column rules), delete.
+- **Roles** — list, create/edit (allow/deny globs, column rules and visual row rules), delete.
 
 Every change is written straight back to `pgdatahub.ini` and applied immediately (no
 restart). The page itself is unauthenticated (it holds no data); its calls require the
@@ -386,7 +488,7 @@ PgDataHub/
 
 ### Key Design Decisions
 
-**Metadata cache + LISTEN/NOTIFY** — Schema queries run only once at startup and again when PostgreSQL notifies of a change. Under high concurrency, there is zero per-request schema overhead.
+**Metadata cache + LISTEN/NOTIFY** — Schema metadata is cached, refreshed after coalesced PostgreSQL notifications and periodically reconciled. If event trigger installation is unavailable, LISTEN and polling continue. Requests read the shared cache without querying schema metadata.
 
 **Parameterized queries** — All filter values are bound as `NpgsqlParameter`. Types (integer, numeric, uuid, timestamp, boolean) are inferred from column metadata, so no SQL injection is possible.
 

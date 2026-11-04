@@ -17,7 +17,7 @@ internal static class DockerConfigBootstrap
         var adminKey = Environment.GetEnvironmentVariable("PGDATAHUB_ADMIN_KEY");
         if (!string.IsNullOrWhiteSpace(adminKey))
         {
-            if (adminKey.Length < 16)
+            if (adminKey.Length < 16 || adminKey == "change-this-admin-key" || adminKey.StartsWith("replace-with-", StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("PGDATAHUB_ADMIN_KEY must be at least 16 characters.");
 
             config.Auth.Enabled = true;

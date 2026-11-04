@@ -72,6 +72,7 @@ internal static class IniAuthWriter
             PatchSection(lines, "function", new Dictionary<string, string>
             {
                 ["include"] = Join(config.Function.Include), ["exclude"] = Join(config.Function.Exclude),
+                ["volatileInclude"] = Join(config.Function.VolatileInclude),
                 ["defaultTimeout"] = config.Function.DefaultTimeout.ToString(CultureInfo.InvariantCulture),
                 ["maxRows"] = config.Function.MaxRows.ToString(CultureInfo.InvariantCulture)
             });
@@ -228,6 +229,9 @@ internal static class IniAuthWriter
             sb.AppendLine($"collections.deny={Join(role.CollectionsDeny)}");
             sb.AppendLine($"functions.allow={Join(role.FunctionsAllow)}");
             sb.AppendLine($"functions.deny={Join(role.FunctionsDeny)}");
+            sb.AppendLine($"functions.volatile.allow={Join(role.FunctionsVolatileAllow)}");
+            sb.AppendLine($"functions.volatile.deny={Join(role.FunctionsVolatileDeny)}");
+            sb.AppendLine($"rows={System.Text.Json.JsonSerializer.Serialize(role.RowRules)}");
 
             foreach (var (pattern, rule) in role.ColumnRules)
             {

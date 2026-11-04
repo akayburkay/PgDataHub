@@ -7,6 +7,10 @@ PgDataHub is a .NET 10 service that exposes PostgreSQL tables, views, and functi
 - **Zero application code:** Configure it through `pgdatahub.ini` or the administration console.
 - **PostGIS and GeoJSON:** Geometry columns are automatically returned as GeoJSON `FeatureCollection` responses, with bbox filtering and CRS transformation.
 - **Rich queries:** Filtering, sorting, column selection, pagination, distinct results, and counts.
+- **OGC discovery:** Landing page, conformance, collections, GeoJSON features and next-page links for GIS clients.
+- **Row policies:** Fixed values or JWT claims, managed in the admin role editor without database policy changes.
+- **Spatial analysis:** 15 operations including buffering, overlays, measurements and indexed distance searches.
+- **Dynamic OpenAPI:** Production Swagger and concrete collection/function paths generated from authorized metadata.
 - **Live metadata:** Matching schema changes are detected through PostgreSQL `LISTEN/NOTIFY` without restarting the service.
 - **Security:** API key and JWT authentication, role-based table/view/function and column permissions, secure admin sessions, and CSRF protection.
 - **PostgreSQL functions:** Parameterized and overloaded functions are distinguished by OID and signature.
@@ -90,11 +94,16 @@ Changes saved through the administration console are written atomically and appl
 | Endpoint | Description |
 |---|---|
 | `GET /metadata` | Metadata for authorized tables, views, and functions |
+| `GET /`, `/conformance`, `/collections` | OGC discovery and collection descriptions |
 | `GET /collections/{schema}.{table}/items` | Query rows or features |
 | `GET /collections/{schema}.{table}/items/{id}` | Get one row by primary key |
 | `GET /collections/{schema}.{table}/queryables` | Queryable column schema |
+| `POST /collections/{schema}.{table}/analysis/{operation}` | Read-only spatial analysis with the caller's row rules |
+| `GET /analysis/operations` | List all 15 available analyses |
+| `GET /api`, `/swagger/` | Dynamic OpenAPI and Swagger UI |
 | `GET /functions` | List authorized functions |
-| `GET /functions/{schema}.{name}/items` | Execute a function |
+| `GET /functions/{schema}.{name}/items` | Execute a STABLE/IMMUTABLE function |
+| `POST /functions/{schema}.{name}/items` | Execute a function; VOLATILE requires opt-in and separate permission |
 | `GET /health/live` | Application liveness check |
 | `GET /health/ready` | Application and database readiness check |
 
@@ -103,9 +112,12 @@ See the [full documentation](DOCS.md) for all parameters, the authorization mode
 ## Testing
 
 ```bash
-dotnet run --project Tests/PgDataHub.Tests.csproj
-powershell -ExecutionPolicy Bypass -File Tests/e2e.ps1
+dotnet test Tests/PgDataHub.Tests.csproj
+node --test Tests/admin-i18n.test.cjs
+pwsh -File Tests/e2e.ps1 -CollectionPattern public.osm*
 ```
+
+Set `ADMIN_API_KEY` and optionally `BASE_URL` for the end-to-end script, and choose a collection pattern that exists in the target database. Use PowerShell 7. Production admin sessions require HTTPS; `-SkipCertificateCheck` is available for a local development HTTPS certificate. Integration tests use the configured local PostGIS database and remove their temporary schemas; the trigger-permission fixture also creates a temporary database and role, requiring a privileged test account.
 
 For load testing, install [k6](https://grafana.com/docs/k6/latest/set-up/install-k6/) and run:
 

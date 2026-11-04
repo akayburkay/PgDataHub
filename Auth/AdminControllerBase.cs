@@ -4,8 +4,13 @@ using PgDataHub.Config;
 namespace PgDataHub.Auth;
 
 /// <summary>Base for admin-only management controllers (API keys, roles).</summary>
-public abstract class AdminControllerBase : ControllerBase
+public abstract class AdminControllerBase : Controller
 {
+    public override void OnActionExecuting(Microsoft.AspNetCore.Mvc.Filters.ActionExecutingContext context)
+    {
+        if (AdminGuard() is { } denied) context.Result = denied;
+        base.OnActionExecuting(context);
+    }
     private readonly PgDataHubConfig _config;
     private readonly AdminSessionService _sessions;
 

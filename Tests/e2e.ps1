@@ -1,6 +1,8 @@
 param(
     [string]$BaseUrl = $(if ($env:BASE_URL) { $env:BASE_URL } else { 'http://localhost:5270' }),
-    [string]$AdminKey = $env:ADMIN_API_KEY
+    [string]$AdminKey = $env:ADMIN_API_KEY,
+    [string]$CollectionPattern = 'public.osm*',
+    [switch]$SkipCertificateCheck
 )
 
 $ErrorActionPreference = 'Stop'
@@ -35,6 +37,7 @@ function Request(
         TimeoutSec = 20
     }
     if ($null -ne $WebSession) { $request.WebSession = $WebSession }
+    if ($SkipCertificateCheck) { $request.SkipCertificateCheck = $true }
     if ($null -ne $Body) {
         $request.ContentType = 'application/json'
         $request.Body = $Body | ConvertTo-Json -Depth 20 -Compress
@@ -43,11 +46,18 @@ function Request(
 }
 
 function Json($Response) {
-    if ([string]::IsNullOrWhiteSpace($Response.Content)) { return $null }
-    $Response.Content | ConvertFrom-Json
+    $content = $Response.Content
+    if ($content -is [byte[]]) { $content = [System.Text.Encoding]::UTF8.GetString($content) }
+    if ([string]::IsNullOrWhiteSpace($content)) { return $null }
+    $content | ConvertFrom-Json
 }
 
 try {
+    $landing = Request GET '/'
+    Assert-True ($landing.StatusCode -eq 200) 'OGC landing page is public'
+    Assert-True (@((Json $landing).links | Where-Object rel -eq 'data').Count -eq 1) 'landing links to collections'
+    $conformance = Request GET '/conformance'
+    Assert-True ((Json $conformance).conformsTo -contains 'http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/core') 'OGC conformance is declared'
     $anonymous = Request GET '/metadata'
     Assert-True ($anonymous.StatusCode -eq 401) 'anonymous metadata is rejected'
 
@@ -79,7 +89,7 @@ try {
 
     $role = @{
         description = 'Temporary end-to-end test role'
-        collectionsAllow = @('public.osm*')
+        collectionsAllow = @($CollectionPattern)
         collectionsDeny = @()
         functionsAllow = @()
         functionsDeny = @()
@@ -106,14 +116,23 @@ try {
     Assert-True ($metadata.StatusCode -eq 200) 'role API key can read metadata'
     $metadataBody = Json $metadata
     $forbiddenCollection = @($metadataBody.collections | Where-Object {
-        -not ("$($_.schema).$($_.name)" -like 'public.osm*')
+        -not ("$($_.schema).$($_.name)" -like $CollectionPattern)
     })
     Assert-True ($forbiddenCollection.Count -eq 0) 'metadata contains only role-allowed collections'
     Assert-True ($metadataBody.functions.Count -eq 0) 'metadata hides functions not allowed by the role'
 
-    $allowed = @($metadataBody.collections)[0]
+    $allowed = @($metadataBody.collections | Sort-Object isSpatial -Descending)[0]
     Assert-True ($null -ne $allowed) 'role has at least one allowed collection'
     $collectionId = "$($allowed.schema).$($allowed.name)"
+
+    $collections = Request GET '/collections?f=json' $null $apiHeaders
+    Assert-True ($collections.StatusCode -eq 200) 'OGC collections can be discovered'
+    Assert-True (@((Json $collections).collections | Where-Object id -eq $collectionId).Count -eq 1) 'authorized collection appears in discovery'
+    $description = Request GET "/collections/$collectionId" $null $apiHeaders
+    Assert-True ((Json $description).itemType -eq 'feature') 'collection advertises feature items'
+    $definition = Request GET '/api' $null $apiHeaders
+    Assert-True ($definition.StatusCode -eq 200) 'dynamic OpenAPI responds'
+    Assert-True ((Json $definition).paths.PSObject.Properties.Name -contains "/collections/$collectionId/items") 'OpenAPI contains the concrete collection path'
 
     $queryables = Request GET "/collections/$collectionId/queryables" $null $apiHeaders
     Assert-True ($queryables.StatusCode -eq 200) 'allowed collection queryables can be read'
@@ -121,6 +140,42 @@ try {
     $items = Request GET "/collections/$collectionId/items?limit=2" $null $apiHeaders
     Assert-True ($items.StatusCode -eq 200) 'allowed collection items can be read'
     Assert-True (($items.Headers.'Content-Type' | Select-Object -First 1) -match 'json') 'items response is JSON'
+    $itemBody = Json $items
+    Assert-True ($itemBody.type -eq 'FeatureCollection') 'collection response is GeoJSON'
+    Assert-True ($itemBody.numberReturned -le 2) 'lookahead row is not returned'
+    $next = @($itemBody.links | Where-Object rel -eq 'next')
+    if ($next.Count) {
+        $nextPath = ([Uri]$next[0].href).PathAndQuery
+        $nextResponse = Request GET $nextPath $null $apiHeaders
+        Assert-True ($nextResponse.StatusCode -eq 200) 'next link can be followed'
+    }
+    if ($allowed.isSpatial) {
+        $geojson = Json $items
+        Assert-True (($items.Headers.'Content-Type' | Select-Object -First 1) -match 'application/geo\+json') 'spatial items have GeoJSON content type'
+        Assert-True ($geojson.type -eq 'FeatureCollection') 'spatial items are a FeatureCollection'
+        Assert-True ($null -ne $geojson.features) 'GeoJSON contains features'
+        foreach ($feature in $geojson.features) {
+            Assert-True ($feature.type -eq 'Feature') 'GeoJSON members are Features'
+            Assert-True ($feature.PSObject.Properties.Name -contains 'geometry') 'GeoJSON Feature has geometry'
+            Assert-True ($null -ne $feature.properties) 'GeoJSON Feature has properties'
+        }
+    }
+
+    if ($allowed.primaryKey -and $itemBody.features.Count -gt 0) {
+        $id = $itemBody.features[0].id
+        $role.rowRules = @(@{ pattern = $collectionId; conditions = @(@{ column = $allowed.primaryKey; operator = 'eq'; values = @([string]$id) }) })
+        $restricted = Request PUT "/auth/roles/$roleName" $role $adminHeaders $session
+        Assert-True ($restricted.StatusCode -eq 204) 'row rule is saved through management API'
+        $oneRow = Json (Request GET "/collections/$collectionId/items?limit=2&count=true" $null $apiHeaders)
+        Assert-True ($oneRow.numberReturned -eq 1 -and $oneRow.numberMatched -eq 1) 'row policy limits results and count'
+        Assert-True (@($oneRow.links | Where-Object rel -eq 'next').Count -eq 0) 'row policy prevents unauthorized next pages'
+        $single = Json (Request GET "/collections/$collectionId/items/$id" $null $apiHeaders)
+        Assert-True ($single.type -eq 'Feature') 'single item is a Feature rather than a collection'
+        if ($allowed.isSpatial) {
+            $analysis = Request POST "/collections/$collectionId/analysis/centroid?limit=2" @{} $apiHeaders
+            Assert-True ($analysis.StatusCode -eq 200 -and (Json $analysis).numberReturned -eq 1) 'spatial analysis applies the row policy'
+        }
+    }
 
     $invalid = Request GET "/collections/$collectionId/items?limit=invalid" $null $apiHeaders
     Assert-True ($invalid.StatusCode -eq 400) 'invalid query value returns 400'

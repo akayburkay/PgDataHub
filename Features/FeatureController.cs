@@ -14,17 +14,20 @@ public sealed class FeatureController : ControllerBase
     private readonly FeatureQueryBuilder _queryBuilder;
     private readonly AuthService _auth;
     private readonly PgDataHubConfig _config;
+    private readonly CollectionAccessService _access;
 
     public FeatureController(
         FeatureService featureService,
         FeatureQueryBuilder queryBuilder,
         AuthService auth,
-        PgDataHubConfig config)
+        PgDataHubConfig config,
+        CollectionAccessService access)
     {
         _featureService = featureService;
         _queryBuilder = queryBuilder;
         _auth = auth;
         _config = config;
+        _access = access;
     }
 
     /// <summary>
@@ -47,7 +50,7 @@ public sealed class FeatureController : ControllerBase
                 new { error = "Forbidden", collectionId = $"{collection.Schema}.{collection.Name}" }));
         }
 
-        return (await _auth.ApplyColumnRulesAsync(roles, collection, ct), null);
+        return (await _access.ApplyAsync(collection, User, ct), null);
     }
 
     [HttpGet("{collectionId}/items")]
@@ -55,6 +58,7 @@ public sealed class FeatureController : ControllerBase
         string collectionId,
         CancellationToken cancellationToken)
     {
+        OgcSupport.ValidateFormat(Request, features: true);
         var stage = Stopwatch.StartNew();
         var collection = await _featureService.GetCollectionAsync(collectionId, cancellationToken);
         RequestTiming.Add(HttpContext, "metadata", stage.Elapsed);
@@ -86,7 +90,7 @@ public sealed class FeatureController : ControllerBase
         FeatureQuery query;
         try
         {
-            query = _queryBuilder.Build(collection, parameters);
+            query = _queryBuilder.Build(collection, parameters, includeNext: true);
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
         {
@@ -104,10 +108,14 @@ public sealed class FeatureController : ControllerBase
 
             await using (result)
             {
+                if (collection.IsSpatial)
+                    Response.Headers["Content-Crs"] = $"<{OgcSupport.CrsUri(parameters.ResponseCrsSrid ?? 4326, OgcSupport.HasHeight(collection))}>";
                 await JsonWriter.WriteAsync(
                     Response,
                     result,
-                    cancellationToken);
+                    cancellationToken,
+                    new FeatureWriteOptions { ForceGeoJson = true, PageSize = query.PageSize,
+                        Links = next => OgcSupport.PageLinks(Request, query.PageSize, query.Offset, next) });
             }
 
             return new EmptyResult();
@@ -123,6 +131,7 @@ public sealed class FeatureController : ControllerBase
     string collectionId,
     CancellationToken cancellationToken)
     {
+        OgcSupport.ValidateFormat(Request, alternativeMediaType: "application/schema+json");
         var collection = await _featureService.GetCollectionAsync(collectionId, cancellationToken);
 
         if (collection is null)
@@ -197,12 +206,13 @@ public sealed class FeatureController : ControllerBase
             properties[column.Name] = item;
         }
 
-        return Ok(new
+        return new JsonResult(new Dictionary<string, object>
         {
-            title = $"{collection.Schema}.{collection.Name}",
-            type = "object",
-            properties
-        });
+            ["$schema"] = "https://json-schema.org/draft/2020-12/schema",
+            ["$id"] = OgcSupport.BaseUrl(Request) + Request.Path,
+            ["title"] = $"{collection.Schema}.{collection.Name}",
+            ["type"] = "object", ["properties"] = properties
+        }) { ContentType = "application/schema+json" };
     }
     [HttpGet("{collectionId}/items/{id}")]
     public async Task<IActionResult> GetFeatureByIdAsync(
@@ -210,6 +220,7 @@ public sealed class FeatureController : ControllerBase
     string id,
     CancellationToken ct)
     {
+        OgcSupport.ValidateFormat(Request, features: true);
         var collection = await _featureService.GetCollectionAsync(collectionId, ct);
 
         if (collection is null)
@@ -228,7 +239,12 @@ public sealed class FeatureController : ControllerBase
         FeatureResult result;
         try
         {
-            result = await _featureService.GetFeatureByIdAsync(collection, id, ct);
+            var srid = Request.Query.TryGetValue("crs", out var crs)
+                ? FeatureQueryParametersParser.ParseCrs(crs.ToString(), "crs") : 4326;
+            if (string.IsNullOrEmpty(collection.PrimaryKey))
+                throw new InvalidOperationException("The collection does not have a visible single-column feature identifier.");
+            result = await _featureService.ExecuteAsync(_queryBuilder.BuildFeatureById(collection, id, srid), ct);
+            if (collection.IsSpatial) Response.Headers["Content-Crs"] = $"<{OgcSupport.CrsUri(srid, OgcSupport.HasHeight(collection))}>";
         }
         catch (InvalidOperationException ex)
         {
@@ -249,7 +265,8 @@ public sealed class FeatureController : ControllerBase
             await JsonWriter.WriteAsync(
                 Response,
                 result,
-                ct);
+                ct, new FeatureWriteOptions { SingleFeature = true,
+                    Links = _ => OgcSupport.PageLinks(Request, null, 0, false) });
         }
 
         return new EmptyResult();

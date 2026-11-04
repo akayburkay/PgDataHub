@@ -58,6 +58,7 @@ public sealed class ConfigService
             _config.Feature.MaxLimit = request.Feature.MaxLimit;
             _config.Function.Include = Clean(request.Function.Include);
             _config.Function.Exclude = Clean(request.Function.Exclude);
+            _config.Function.VolatileInclude = Clean(request.Function.VolatileInclude ?? []);
             _config.Function.DefaultTimeout = request.Function.DefaultTimeout;
             _config.Function.MaxRows = request.Function.MaxRows;
             _config.Auth.Enabled = request.Auth.Enabled;
@@ -121,7 +122,7 @@ public sealed class ConfigService
         var strings = new[] { v.Database.Host, v.Database.Database, v.Database.User, v.Database.Password,
             v.Auth.DefaultRole, v.Auth.AdminRole, v.Auth.ApiKey.Header, v.Auth.Jwt.Authority,
             v.Auth.Jwt.Audience, v.Auth.Jwt.RoleClaim }.Concat(v.Collections.Include).Concat(v.Collections.Exclude)
-            .Concat(v.Function.Include).Concat(v.Function.Exclude)
+            .Concat(v.Function.Include).Concat(v.Function.Exclude).Concat(v.Function.VolatileInclude ?? [])
             .Concat(v.Tables.SelectMany(t => new[] { t.Collection }.Concat(t.Allow).Concat(t.Hide)));
         if (strings.Any(s => s?.IndexOfAny(['\r', '\n']) >= 0)) throw new ArgumentException("Configuration values cannot contain line breaks.");
     }
@@ -146,7 +147,7 @@ public sealed class ConfigView
         Database = new(c.Database.Host, c.Database.Port, c.Database.Database, c.Database.User, c.Database.Password.Length > 0, c.Database.MinPoolSize, c.Database.MaxPoolSize, c.Database.CommandTimeout),
         Collections = new([.. c.Collections.Include], [.. c.Collections.Exclude]),
         Feature = new(c.Feature.DefaultLimit, c.Feature.MaxLimit),
-        Function = new([.. c.Function.Include], [.. c.Function.Exclude], c.Function.DefaultTimeout, c.Function.MaxRows),
+        Function = new([.. c.Function.Include], [.. c.Function.Exclude], c.Function.DefaultTimeout, c.Function.MaxRows, [.. c.Function.VolatileInclude]),
         Auth = AuthUpdate.From(c.Auth),
         Tables = c.Tables.Select(x => new TableOverrideUpdate(x.Key, [.. x.Value.Feature.Allow], [.. x.Value.Feature.Hide])).ToList()
     };
@@ -155,7 +156,7 @@ public sealed record DatabaseView(string Host, int Port, string Database, string
 public sealed record DatabaseUpdate(string Host, int Port, string Database, string User, string? Password, int MinPoolSize, int MaxPoolSize, int CommandTimeout);
 public sealed record CollectionsUpdate(List<string> Include, List<string> Exclude);
 public sealed record FeatureUpdate(int DefaultLimit, int MaxLimit);
-public sealed record FunctionUpdate(List<string> Include, List<string> Exclude, int DefaultTimeout, int MaxRows);
+public sealed record FunctionUpdate(List<string> Include, List<string> Exclude, int DefaultTimeout, int MaxRows, List<string>? VolatileInclude = null);
 public sealed record ApiKeyAuthUpdate(bool Enabled, string Header);
 public sealed record JwtAuthUpdate(bool Enabled, string Authority, string Audience, string RoleClaim);
 public sealed record AuthUpdate(bool Enabled, string DefaultRole, string AdminRole, ApiKeyAuthUpdate ApiKey, JwtAuthUpdate Jwt)

@@ -14,6 +14,8 @@ using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.DataProtection.KeyManagement;
 using Microsoft.Extensions.Logging.EventLog;
+using Microsoft.AspNetCore.HttpOverrides;
+using System.Net;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -49,6 +51,7 @@ builder.Services.AddSingleton<ConfigService>();
 builder.Services.AddSingleton<FeatureQueryBuilder>();
 
 builder.Services.AddScoped<FeatureService>();
+builder.Services.AddScoped<CollectionAccessService>();
 builder.Services.AddScoped<FunctionService>();
 builder.Services.AddHostedService<MetadataListenerService>();
 
@@ -69,6 +72,7 @@ authn.AddPolicyScheme("PgDataHub", displayName: null, options =>
 authn.AddScheme<AuthenticationSchemeOptions, ApiKeyAuthenticationHandler>(ApiKeyAuthenticationHandler.SchemeName, null);
 authn.AddJwtBearer(options =>
 {
+    options.MapInboundClaims = false;
     options.Authority = config.Auth.Jwt.Authority;
     options.Audience = config.Auth.Jwt.Audience;
     options.TokenValidationParameters.RoleClaimType = config.Auth.Jwt.RoleClaim;
@@ -79,11 +83,35 @@ builder.Services.AddAuthorization(options =>
         .Build());
 
 builder.Services.AddControllers();
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.ForwardLimit = Math.Max(1, builder.Configuration.GetValue("ReverseProxy:ForwardLimit", 1));
+    foreach (var address in builder.Configuration.GetSection("ReverseProxy:KnownProxies").Get<string[]>() ?? [])
+        options.KnownProxies.Add(IPAddress.Parse(address));
+    foreach (var network in builder.Configuration.GetSection("ReverseProxy:KnownNetworks").Get<string[]>() ?? [])
+        options.KnownIPNetworks.Add(System.Net.IPNetwork.Parse(network));
+});
+builder.Services.AddCors(options => options.AddDefaultPolicy(policy =>
+{
+    var origins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
+    if (origins.Length == 0)
+        policy.AllowAnyOrigin().WithMethods("GET", "HEAD", "OPTIONS");
+    else
+        policy.WithOrigins(origins).AllowAnyMethod();
+    policy.AllowAnyHeader().WithExposedHeaders("Content-Crs", "Server-Timing");
+}));
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<ApiExceptionHandler>();
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(_ =>
+        RateLimitPartition.GetConcurrencyLimiter("application", _ => new ConcurrencyLimiterOptions
+        {
+            PermitLimit = builder.Configuration.GetValue("Limits:ConcurrentRequests", 100),
+            QueueLimit = 0
+        }));
     options.AddPolicy("admin-login", context => RateLimitPartition.GetFixedWindowLimiter(
         context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new FixedWindowRateLimiterOptions
@@ -124,6 +152,7 @@ builder.Services.AddSwaggerGen();
 var app = builder.Build();
 var serverTimingEnabled = builder.Configuration.GetValue("Diagnostics:ServerTiming", false);
 
+app.UseForwardedHeaders();
 app.UseExceptionHandler();
 app.UseStatusCodePages(async statusContext =>
 {
@@ -147,6 +176,8 @@ app.UseStatusCodePages(async statusContext =>
     });
 });
 app.UseResponseCompression();
+app.UseRouting();
+app.UseCors();
 app.UseRateLimiter();
 if (serverTimingEnabled) app.Use(async (context, next) =>
 {
@@ -167,7 +198,7 @@ app.Use(async (context, next) =>
         context.Response.Headers["X-Frame-Options"] = "DENY";
         context.Response.Headers["Cache-Control"] = "no-store";
         context.Response.Headers["Content-Security-Policy"] =
-            "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
+            "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
     }
     await next();
 });
@@ -178,28 +209,11 @@ app.Use(async (context, next) =>
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
+// The UI is static; the dynamic specification below retains API/session authorization.
+app.UseSwaggerUI(options => options.SwaggerEndpoint("../api", "PgDataHub dynamic API"));
+
 app.UseAuthentication();
 app.UseAuthorization();
-
-if (app.Environment.IsDevelopment())
-{
-    // Swagger exposes the complete API inventory. Keep it behind the same
-    // authentication boundary as the API when authentication is enabled.
-    app.UseWhen(context => context.Request.Path.StartsWithSegments("/swagger"), branch =>
-    {
-        branch.Use(async (context, next) =>
-        {
-            if (config.Auth.Enabled && context.User.Identity?.IsAuthenticated != true)
-            {
-                await context.ChallengeAsync();
-                return;
-            }
-            await next();
-        });
-    });
-    app.UseSwagger();
-    app.UseSwaggerUI();
-}
 
 app.MapControllers();
 

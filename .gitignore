@@ -35,3 +35,4 @@ _scan/
 .env
 .docker-verification/
 .docker-runtime-test/
+Tests/TestResults/

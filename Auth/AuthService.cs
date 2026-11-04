@@ -58,6 +58,10 @@ public sealed class AuthService
         IReadOnlyList<string> roles, string schema, string name, CancellationToken ct = default)
         => Task.FromResult(Evaluate(_cache, roles, ResourceType.Function, Full(schema, name)));
 
+    public Task<bool> CanExecuteVolatileFunctionAsync(
+        IReadOnlyList<string> roles, string schema, string name, CancellationToken ct = default)
+        => Task.FromResult(Evaluate(_cache, roles, ResourceType.VolatileFunction, Full(schema, name)));
+
     /// <summary>
     /// Effective column visibility for a principal on a collection, merged across
     /// all matching allow-permissions: union of allow-lists and hides. A hidden
@@ -219,8 +223,10 @@ public sealed class AuthService
     {
         ValidateRoleName(name);
         ValidateIniValue(req.Description, nameof(req.Description));
+        RowRule.Validate(req.RowRules ?? []);
         foreach (var value in (req.CollectionsAllow ?? []).Concat(req.CollectionsDeny ?? [])
-            .Concat(req.FunctionsAllow ?? []).Concat(req.FunctionsDeny ?? []))
+            .Concat(req.FunctionsAllow ?? []).Concat(req.FunctionsDeny ?? [])
+            .Concat(req.FunctionsVolatileAllow ?? []).Concat(req.FunctionsVolatileDeny ?? []))
             ValidateIniValue(value, "permission pattern");
         foreach (var rule in req.ColumnRules ?? [])
         {
@@ -242,6 +248,9 @@ public sealed class AuthService
             role.CollectionsDeny = req.CollectionsDeny ?? [];
             role.FunctionsAllow = req.FunctionsAllow ?? [];
             role.FunctionsDeny = req.FunctionsDeny ?? [];
+            role.FunctionsVolatileAllow = req.FunctionsVolatileAllow ?? [];
+            role.FunctionsVolatileDeny = req.FunctionsVolatileDeny ?? [];
+            role.RowRules = req.RowRules ?? [];
             role.ColumnRules = (req.ColumnRules ?? [])
                 .Where(c => !string.IsNullOrWhiteSpace(c.Pattern))
                 .ToDictionary(
@@ -283,6 +292,9 @@ public sealed class AuthService
         CollectionsDeny = role.CollectionsDeny,
         FunctionsAllow = role.FunctionsAllow,
         FunctionsDeny = role.FunctionsDeny,
+        FunctionsVolatileAllow = role.FunctionsVolatileAllow,
+        FunctionsVolatileDeny = role.FunctionsVolatileDeny,
+        RowRules = role.RowRules,
         ColumnRules = role.ColumnRules
             .Select(kv => new RoleColumnRule { Pattern = kv.Key, Allow = kv.Value.Allow, Hide = kv.Value.Hide })
             .ToList()
@@ -309,6 +321,19 @@ public sealed class AuthService
 
         foreach (var role in _config.Roles)
         {
+            foreach (var pattern in role.FunctionsVolatileAllow)
+                permissions.Add(new RolePermission
+                {
+                    RoleName = role.Name, ResourceType = ResourceType.VolatileFunction,
+                    Pattern = pattern, Effect = PermissionEffect.Allow
+                });
+            foreach (var pattern in role.FunctionsVolatileDeny)
+                permissions.Add(new RolePermission
+                {
+                    RoleName = role.Name, ResourceType = ResourceType.VolatileFunction,
+                    Pattern = pattern, Effect = PermissionEffect.Deny
+                });
+
             foreach (var pattern in role.CollectionsAllow)
             {
                 role.ColumnRules.TryGetValue(pattern, out var cr);

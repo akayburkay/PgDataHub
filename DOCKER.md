@@ -117,6 +117,20 @@ docker compose down
 
 ## Troubleshooting
 
+For a TLS reverse proxy, configure its actual address in the application container. For example, a `compose.override.yml` for a proxy on a dedicated network can contain:
+
+```yaml
+services:
+  pgdatahub:
+    environment:
+      ReverseProxy__KnownProxies__0: "172.30.0.2"
+      Cors__AllowedOrigins__0: "https://maps.example.com"
+      Metadata__PollIntervalSeconds: "60"
+      Metadata__DebounceMilliseconds: "500"
+```
+
+Use your deployment's proxy IP and browser origin. The proxy must forward `X-Forwarded-For` and `X-Forwarded-Proto`; the admin login limiter then applies per client IP. Multiple origins use numbered CORS entries. Without an origin list, cross-origin GET requests are allowed and browser credentials are disabled. Managed databases can run without event trigger privileges; metadata still refreshes by polling. See [DOCS.md](DOCS.md#browser-access-and-reverse-proxies) for the available settings.
+
 If the database is unhealthy in `docker compose ps`, inspect `docker compose logs db`. Changing `.env` does not retroactively change PostgreSQL credentials inside an already initialized volume.
 
 If Docker Desktop cannot start or reports local socket errors involving paths such as `engine.sock` or `dockerInference`, the failure occurs before Compose or PgDataHub runs. Repair or reset Docker Desktop, or use its official diagnostics. On a healthy Docker installation, this project starts with `docker compose up -d` and requires no additional local dependency.

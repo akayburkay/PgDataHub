@@ -21,7 +21,7 @@ public sealed class RoleDefinition
 
 public enum PermissionEffect { Allow, Deny }
 
-public enum ResourceType { Collection, Function }
+public enum ResourceType { Collection, Function, VolatileFunction }
 
 public sealed class RolePermission
 {
@@ -88,7 +88,10 @@ public sealed class RoleInfo
     public IReadOnlyList<string> CollectionsDeny { get; init; } = [];
     public IReadOnlyList<string> FunctionsAllow { get; init; } = [];
     public IReadOnlyList<string> FunctionsDeny { get; init; } = [];
+    public IReadOnlyList<string> FunctionsVolatileAllow { get; init; } = [];
+    public IReadOnlyList<string> FunctionsVolatileDeny { get; init; } = [];
     public IReadOnlyList<RoleColumnRule> ColumnRules { get; init; } = [];
+    public IReadOnlyList<RowRule> RowRules { get; init; } = [];
 }
 
 public sealed class RoleColumnRule
@@ -106,7 +109,10 @@ public sealed class RoleUpsertRequest
     public List<string>? CollectionsDeny { get; init; }
     public List<string>? FunctionsAllow { get; init; }
     public List<string>? FunctionsDeny { get; init; }
+    public List<string>? FunctionsVolatileAllow { get; init; }
+    public List<string>? FunctionsVolatileDeny { get; init; }
     public List<RoleColumnRule>? ColumnRules { get; init; }
+    public List<RowRule>? RowRules { get; init; }
 }
 
 public enum DeleteRoleResult { Deleted, NotFound, Referenced }

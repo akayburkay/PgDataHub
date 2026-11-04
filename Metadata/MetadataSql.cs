@@ -113,7 +113,8 @@ internal static class MetadataSql
                 when t.typtype = 'c' then 'Composite'
                 else 'Scalar'
             end,
-            d.description
+            d.description,
+            p.provolatile::text
         from pg_proc p
         join pg_namespace n on n.oid = p.pronamespace
         join pg_type t on t.oid = p.prorettype
@@ -122,6 +123,7 @@ internal static class MetadataSql
         left join pg_extension ext on ext.oid = dep.refobjid
         where
             p.prokind = 'f'
+            and (p.provolatile in ('s', 'i') or @include_volatile)
             and ext.extname is null
             and n.nspname not in ('pg_catalog', 'information_schema', 'topology')
             and (

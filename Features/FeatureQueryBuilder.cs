@@ -38,6 +38,7 @@ public sealed class FeatureQueryParameters
     public int? ResponseCrsSrid { get; init; }
 
     public bool Count { get; init; }
+    public TemporalInterval? DateTime { get; init; }
     public IReadOnlyList<PropertyFilter> Filters { get; init; } = [];
 }
 
@@ -46,7 +47,7 @@ public static class ReservedQueryKeys
     public static readonly HashSet<string> Names = new(StringComparer.OrdinalIgnoreCase)
     {
         "limit", "offset", "select", "distinct", "orderby",
-        "bbox", "bbox-crs", "crs",  "count", "f"
+        "bbox", "bbox-crs", "crs", "datetime", "count", "f"
     };
 }
 
@@ -56,6 +57,8 @@ public sealed class FeatureQuery
     public required CollectionMetadata Collection { get; init; }
     public required string Sql { get; init; }
     public IReadOnlyList<NpgsqlParameter> Parameters { get; init; } = [];
+    public int? PageSize { get; init; }
+    public int Offset { get; init; }
 
     public const string TotalCountColumn = "__total_count";
 }
@@ -72,13 +75,17 @@ public sealed class FeatureQueryBuilder
 
     public FeatureQuery Build(
         CollectionMetadata collection,
-        FeatureQueryParameters? parameters = null)
+        FeatureQueryParameters? parameters = null,
+        bool includeNext = false,
+        SpatialAnalysisSpec? analysis = null)
     {
         parameters ??= new FeatureQueryParameters();
 
         var sqlParameters = new List<NpgsqlParameter>();
 
-        var columns = BuildColumnList(collection, parameters.Select, parameters.ResponseCrsSrid);
+        var analysisPlan = analysis is null ? null : SpatialAnalysis.Build(collection, analysis, parameters.ResponseCrsSrid, sqlParameters);
+        var columns = BuildColumnList(collection, parameters.Select, parameters.ResponseCrsSrid, analysisPlan);
+        if (analysisPlan?.Value is { } value) columns.Add($"{value} as \"analysisValue\"");
 
         if (columns.Count == 0)
         {
@@ -99,22 +106,25 @@ public sealed class FeatureQueryBuilder
         AppendBboxFilter(collection, parameters.Bbox, parameters.BboxCrsSrid, whereClauses, sqlParameters);
 
         AppendPropertyFilters(collection, parameters.Filters, whereClauses, sqlParameters);
+        AppendRowFilters(collection, whereClauses, sqlParameters);
+        AppendTemporalFilter(collection, parameters.DateTime, whereClauses, sqlParameters);
+        if (analysisPlan?.Predicate is { } predicate) whereClauses.Add(predicate);
 
         var whereClause = whereClauses.Count > 0
             ? $"\nwhere {string.Join(" and ", whereClauses)}"
             : string.Empty;
 
-        var orderByClause = BuildOrderByClause(collection, parameters.OrderBy);
+        var orderByClause = BuildOrderByClause(collection, parameters);
 
         var limit = ResolveLimit(parameters.Limit);
         var offset = ResolveOffset(parameters.Offset);
 
         var sql =
 $"""
-select
+{analysisPlan?.Prefix}select
     {distinct}{selectClause}
-from "{collection.Schema}"."{collection.Name}" t{whereClause}{orderByClause}
-limit {limit}
+from {QuoteIdentifier(collection.Schema)}.{QuoteIdentifier(collection.Name)} t{analysisPlan?.Join}{whereClause}{orderByClause}
+limit {(includeNext && limit > 0 ? (long)limit + 1 : limit)}
 offset {offset}
 """;
 
@@ -122,18 +132,21 @@ offset {offset}
         {
             Collection = collection,
             Sql = sql,
-            Parameters = sqlParameters
+            Parameters = sqlParameters,
+            PageSize = includeNext ? limit : null,
+            Offset = offset
         };
     }
 
     public FeatureQuery BuildFeatureById(
     CollectionMetadata collection,
-    string id)
+    string id,
+    int? responseCrsSrid = null)
     {
         var columns = BuildColumnList(
             collection,
             null,
-            null);
+            responseCrsSrid);
 
         if (columns.Count == 0)
         {
@@ -151,13 +164,16 @@ offset {offset}
             "@id",
             primaryKeyColumn,
             id);
+        var sqlParameters = new List<NpgsqlParameter> { parameter };
+        var whereClauses = new List<string> { $"t.{QuoteIdentifier(collection.PrimaryKey)} = @id" };
+        AppendRowFilters(collection, whereClauses, sqlParameters);
 
         var sql =
     $"""
 select
     {string.Join(",\n    ", columns)}
-from "{collection.Schema}"."{collection.Name}" t
-where t."{collection.PrimaryKey}" = @id
+from {QuoteIdentifier(collection.Schema)}.{QuoteIdentifier(collection.Name)} t
+where {string.Join(" and ", whereClauses)}
 limit 1
 """;
 
@@ -165,10 +181,7 @@ limit 1
         {
             Collection = collection,
             Sql = sql,
-            Parameters =
-            [
-                parameter
-            ]
+            Parameters = sqlParameters
         };
     }
 
@@ -176,7 +189,8 @@ limit 1
     private static List<string> BuildColumnList(
         CollectionMetadata collection,
         IReadOnlyList<string>? select,
-        int? responseCrsSrid)
+        int? responseCrsSrid,
+        AnalysisPlan? analysis = null)
     {
         var columns = new List<string>();
 
@@ -200,8 +214,8 @@ limit 1
             source = collection.Columns;
         }
 
-        var geomSrid = collection.Srid ?? 4326;
-        var targetSrid = responseCrsSrid ?? geomSrid;
+        var geomSrid = analysis?.GeometrySrid ?? collection.Srid ?? 4326;
+        var targetSrid = analysis?.OutputSrid ?? responseCrsSrid ?? 4326;
 
         foreach (var column in source)
         {
@@ -209,18 +223,18 @@ limit 1
                 collection.GeometryColumn is not null &&
                 column.Name.Equals(collection.GeometryColumn, StringComparison.OrdinalIgnoreCase))
             {
-                var geomExpr = $"t.\"{column.Name}\"";
+                var geomExpr = analysis?.Geometry ?? $"t.{QuoteIdentifier(column.Name)}";
 
                 if (targetSrid != geomSrid)
                 {
                     geomExpr = $"ST_Transform({geomExpr}, {targetSrid})";
                 }
 
-                columns.Add($"ST_AsGeoJSON({geomExpr})::jsonb as \"{column.Name}\"");
+                columns.Add($"ST_AsGeoJSON({geomExpr})::jsonb as {QuoteIdentifier(column.Name)}");
                 continue;
             }
 
-            columns.Add($"t.\"{column.Name}\"");
+            columns.Add($"t.{QuoteIdentifier(column.Name)}");
         }
 
         return columns;
@@ -237,34 +251,70 @@ limit 1
         if (bbox is null)
             return;
 
-        if (!collection.IsSpatial || collection.GeometryColumn is null)
-        {
-            throw new InvalidOperationException(
-                $"Collection '{collection.Schema}.{collection.Name}' is not spatial; 'bbox' is not supported.");
-        }
+        if (!collection.IsSpatial || collection.GeometryColumn is null) return;
 
-        if (bbox.Length != 4)
+        if (bbox.Length is not (4 or 6))
         {
-            throw new ArgumentException("bbox must contain exactly 4 values: minx,miny,maxx,maxy.");
+            throw new ArgumentException("bbox must contain 4 or 6 coordinate values.");
         }
 
         var p = "@bbox";
 
         // bbox geldiği CRS'te envelope oluştur, gerekirse geometri SRID'ine transform et
-        var envelope = $"ST_MakeEnvelope({p}0, {p}1, {p}2, {p}3, {crsSrid})";
+        var dimensions = bbox.Length / 2;
+        string Envelope(string minX, string maxX) => $"ST_MakeEnvelope({minX}, {p}1, {maxX}, {p}{dimensions + 1}, {crsSrid})";
 
         var geomSrid = collection.Srid ?? 4326;
 
-        var envelopeExpr = geomSrid == crsSrid
-            ? envelope
-            : $"ST_Transform({envelope}, {geomSrid})";
+        var geometry = $"t.{QuoteIdentifier(collection.GeometryColumn)}";
+        string Intersects(string envelope) => $"ST_Intersects({geometry}, {(geomSrid == crsSrid ? envelope : $"ST_Transform({envelope}, {geomSrid})")})";
+        var predicate = crsSrid == 4326 && bbox[0] > bbox[dimensions]
+            ? $"({Intersects(Envelope(p + "0", "180"))} or {Intersects(Envelope("-180", p + dimensions))})"
+            : Intersects(Envelope(p + "0", p + dimensions));
+        if (dimensions == 3)
+        {
+            var vertical = geomSrid == crsSrid ? geometry : $"ST_Transform({geometry}, {crsSrid})";
+            string Volume(string minX, string maxX)
+            {
+                var volume = $"ST_SetSRID(ST_3DMakeBox(ST_MakePoint({minX}, {p}1, {p}2), ST_MakePoint({maxX}, {p}4, {p}5))::geometry, {crsSrid})";
+                // Intersection with a solid box means crossing a face or having a vertex inside.
+                return $"(ST_3DIntersects({vertical}, {volume}) or exists (select 1 from ST_DumpPoints({vertical}) vertex " +
+                    $"where ST_X(vertex.geom) between {minX} and {maxX} and ST_Y(vertex.geom) between {p}1 and {p}4 and ST_Z(vertex.geom) between {p}2 and {p}5))";
+            }
+            var volumeMatch = crsSrid == 4326 && bbox[0] > bbox[3]
+                ? $"({Volume(p + "0", "180")} or {Volume("-180", p + "3")})" : Volume(p + "0", p + "3");
+            predicate = $"({predicate} and (ST_NDims({geometry}) < 3 or (ST_ZMax({vertical}) >= {p}2 and ST_ZMin({vertical}) <= {p}5 and {volumeMatch})))";
+        }
+        if (collection.Columns.FirstOrDefault(c => c.Name == collection.GeometryColumn)?.Nullable != false)
+            predicate = $"({geometry} is null or {predicate})";
+        whereClauses.Add(predicate);
 
-        whereClauses.Add($"t.\"{collection.GeometryColumn}\" && {envelopeExpr}");
-
-        for (var i = 0; i < 4; i++)
+        for (var i = 0; i < bbox.Length; i++)
         {
             sqlParameters.Add(new NpgsqlParameter($"{p}{i}", NpgsqlDbType.Double) { Value = bbox[i] });
         }
+    }
+
+    private static void AppendTemporalFilter(CollectionMetadata collection, TemporalInterval? interval,
+        List<string> where, List<NpgsqlParameter> parameters)
+    {
+        if (interval is null) return;
+        var column = collection.Columns.FirstOrDefault(c => c.Type == "date" || c.Type.StartsWith("timestamp", StringComparison.OrdinalIgnoreCase));
+        if (column is null) return; // Features without a temporal property match datetime filters.
+        var conditions = new List<string>();
+        void Bound(DateTimeOffset? bound, string name, string comparison)
+        {
+            if (bound is null) return;
+            var type = column.Type == "date" ? NpgsqlDbType.Date :
+                column.Type.Contains("with time zone", StringComparison.OrdinalIgnoreCase) ? NpgsqlDbType.TimestampTz : NpgsqlDbType.Timestamp;
+            var value = type == NpgsqlDbType.Date ? bound.Value.UtcDateTime.Date : bound.Value.UtcDateTime;
+            if (type != NpgsqlDbType.TimestampTz) value = System.DateTime.SpecifyKind(value, DateTimeKind.Unspecified);
+            parameters.Add(new NpgsqlParameter(name, type) { Value = value });
+            conditions.Add($"t.{QuoteIdentifier(column.Name)} {comparison} @{name}");
+        }
+        Bound(interval.Start, "datetime_start", ">=");
+        Bound(interval.End, "datetime_end", "<=");
+        where.Add($"(t.{QuoteIdentifier(column.Name)} is null or ({string.Join(" and ", conditions)}))");
     }
 
    
@@ -295,7 +345,7 @@ limit 1
                 throw new ArgumentException($"Geometry column '{column.Name}' cannot be filtered directly.");
             }
 
-            var c = $"t.\"{column.Name}\"";
+            var c = $"t.{QuoteIdentifier(column.Name)}";
             var idx = sqlParameters.Count;
 
             switch (filter.Operator)
@@ -414,6 +464,22 @@ limit 1
         }
     }
 
+    private void AppendRowFilters(CollectionMetadata collection, List<string> where, List<NpgsqlParameter> parameters)
+    {
+        if (collection.RowFilters is null) return;
+        var policyCollection = collection.Copy();
+        policyCollection.Columns = (collection.PolicyColumns ?? collection.Columns).ToList();
+        var branches = new List<string>();
+        foreach (var group in collection.RowFilters)
+        {
+            var conditions = new List<string>();
+            try { AppendPropertyFilters(policyCollection, group, conditions, parameters); }
+            catch (ArgumentException) { continue; } // Invalid policy types fail closed.
+            branches.Add(conditions.Count == 0 ? "true" : $"({string.Join(" and ", conditions)})");
+        }
+        where.Add(branches.Count == 0 ? "false" : $"({string.Join(" or ", branches)})");
+    }
+
     private static string Single(PropertyFilter f)
     {
         if (f.Values.Count != 1)
@@ -519,13 +585,12 @@ limit 1
     }
 
 
-    private static string BuildOrderByClause(CollectionMetadata collection, IReadOnlyList<string>? orderBy)
+    private static string BuildOrderByClause(CollectionMetadata collection, FeatureQueryParameters parameters)
     {
-        if (orderBy is null || orderBy.Count == 0)
-            return string.Empty;
-
+        var orderBy = parameters.OrderBy ?? [];
         var byName = collection.Columns.ToDictionary(c => c.Name, StringComparer.OrdinalIgnoreCase);
         var parts = new List<string>();
+        var ordered = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var raw in orderBy)
         {
@@ -541,12 +606,30 @@ limit 1
             if (!byName.TryGetValue(name, out var column))
                 throw new ArgumentException($"Unknown property '{name}' in 'orderby'.");
 
-            parts.Add($"t.\"{column.Name}\" {(desc ? "desc" : "asc")}");
+            parts.Add($"t.{QuoteIdentifier(column.Name)} {(desc ? "desc" : "asc")}");
+            ordered.Add(column.Name);
+        }
+
+        // A selected subset with DISTINCT must keep its deduplication semantics:
+        // adding an unselected PK to SELECT would change the result set.
+        if (collection.PrimaryKey is { } pk && byName.TryGetValue(pk, out var key) &&
+            !ordered.Contains(key.Name) &&
+            (!parameters.Distinct || parameters.Select is not { Count: > 0 } ||
+             parameters.Select.Contains(key.Name, StringComparer.OrdinalIgnoreCase)))
+            parts.Add($"t.{QuoteIdentifier(key.Name)} asc");
+
+        if (parts.Count == 0 && parameters.Distinct)
+        {
+            var count = parameters.Select is { Count: > 0 }
+                ? parameters.Select.Count(byName.ContainsKey) : collection.Columns.Count;
+            parts.AddRange(Enumerable.Range(1, count).Select(i => i.ToString(CultureInfo.InvariantCulture)));
         }
 
         return parts.Count == 0 ? string.Empty : $"\norder by {string.Join(", ", parts)}";
     }
 
+
+    private static string QuoteIdentifier(string? value) => "\"" + (value ?? "").Replace("\"", "\"\"") + "\"";
 
     private static int ResolveOffset(int? requested)
     {
@@ -609,17 +692,24 @@ public static class FeatureQueryParametersParser
                 throw new ArgumentException($"Invalid 'bbox' value: '{bboxRaw}'.", ex);
             }
 
-            if (bbox.Length != 4 || bbox.Any(v => !double.IsFinite(v)))
-                throw new ArgumentException("bbox must contain exactly 4 finite values: minx,miny,maxx,maxy.");
-
-            if (bbox[0] > bbox[2] || bbox[1] > bbox[3])
-                throw new ArgumentException("bbox minimum values must not exceed maximum values.");
+            if (bbox.Length is not (4 or 6) || bbox.Any(v => !double.IsFinite(v)))
+                throw new ArgumentException("bbox must contain 4 or 6 finite coordinate values.");
         }
 
         var bboxCrs = 4326;
         if (query.TryGetValue("bbox-crs", out var bboxCrsRaw) && !string.IsNullOrWhiteSpace(bboxCrsRaw))
         {
             bboxCrs = ParseCrs(bboxCrsRaw, "bbox-crs");
+        }
+        if (bbox is not null)
+        {
+            var dimensions = bbox.Length / 2;
+            if (bbox[1] > bbox[dimensions + 1] || dimensions == 3 && bbox[2] > bbox[5] ||
+                bboxCrs != 4326 && bbox[0] > bbox[dimensions])
+                throw new ArgumentException("bbox minimum values must not exceed maximum values (longitude may wrap across the antimeridian).");
+            if (bboxCrs == 4326 && (Math.Abs(bbox[0]) > 180 || Math.Abs(bbox[dimensions]) > 180 ||
+                Math.Abs(bbox[1]) > 90 || Math.Abs(bbox[dimensions + 1]) > 90))
+                throw new ArgumentException("CRS84 bbox longitude/latitude values are outside their valid ranges.");
         }
 
         int? responseCrs = null;
@@ -674,6 +764,7 @@ public static class FeatureQueryParametersParser
             BboxCrsSrid = bboxCrs,
             ResponseCrsSrid = responseCrs,
             Count = count,
+            DateTime = query.TryGetValue("datetime", out var datetime) ? TemporalInterval.Parse(datetime ?? "") : null,
             Filters = filters
         };
     }
@@ -820,13 +911,16 @@ public static class FeatureQueryParametersParser
         };
     }
 
-    private static int ParseCrs(string raw, string paramName)
+    public static int ParseCrs(string raw, string paramName)
     {
+        if (raw.Equals(OgcSupport.Crs84, StringComparison.OrdinalIgnoreCase) || raw.Equals("CRS84", StringComparison.OrdinalIgnoreCase) ||
+            raw.Equals(OgcSupport.Crs84h, StringComparison.OrdinalIgnoreCase) || raw.Equals("CRS84h", StringComparison.OrdinalIgnoreCase))
+            return 4326;
         // "EPSG:4326", "http://www.opengis.net/def/crs/EPSG/0/4326", "4326"
         var lastSegment = raw.Split('/', ':')
             .LastOrDefault(s => !string.IsNullOrWhiteSpace(s));
 
-        if (lastSegment is not null && int.TryParse(lastSegment, out var srid))
+        if (lastSegment is not null && int.TryParse(lastSegment, out var srid) && srid > 0)
             return srid;
 
         throw new ArgumentException($"Invalid '{paramName}' value: '{raw}'.");

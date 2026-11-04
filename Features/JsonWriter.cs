@@ -1,142 +1,81 @@
-﻿    using System.Text.Json;
-    using Microsoft.AspNetCore.Http;
-    using Npgsql;
+using System.Text.Json;
+using Npgsql;
 
-    namespace PgDataHub.Features;
+namespace PgDataHub.Features;
 
-    public static class JsonWriter
+public static class JsonWriter
+{
+    private delegate void CellWriter(Utf8JsonWriter w, NpgsqlDataReader r, int ordinal);
+
+    public static async Task WriteAsync(HttpResponse response, FeatureResult result,
+        CancellationToken ct = default, FeatureWriteOptions? options = null)
     {
-        private delegate void CellWriter(Utf8JsonWriter w, NpgsqlDataReader r, int ordinal);
-
-        public static Task WriteAsync(
-        HttpResponse response,
-        FeatureResult result,
-        CancellationToken ct = default)
-        {
-            if (!result.Collection.IsSpatial)
-            {
-                return WriteJsonAsync(
-                    response,
-                    result.Reader,
-                    ct);
-            }
-
-            var geometryOrdinal =
-                GetGeometryOrdinal(
-                    result.Reader);
-
-            return geometryOrdinal >= 0
-                ? WriteGeoJsonAsync(
-                    response,
-                    result.Reader,
-                    ct)
-                : WriteJsonAsync(
-                    response,
-                    result.Reader,
-                    ct);
-        }
-
-    private static async Task WriteJsonAsync(
-HttpResponse response,
-NpgsqlDataReader reader,
-CancellationToken ct)
-    {
-        response.ContentType = "application/json";
-
+        options ??= new FeatureWriteOptions();
+        var reader = result.Reader;
+        var geometryOrdinal = result.Collection.IsSpatial
+            ? GetGeometryOrdinal(reader, result.Collection.GeometryColumn) : -1;
+        var geojson = geometryOrdinal >= 0 || options.ForceGeoJson || options.SingleFeature;
+        response.ContentType = geojson ? "application/geo+json" : "application/json";
         await using var writer = new Utf8JsonWriter(response.Body);
+        var plan = BuildPlan(reader, geometryOrdinal);
+        var idOrdinal = GetGeometryOrdinal(reader, result.Collection.PrimaryKey);
 
-        var plan = BuildPlan(reader, geometryOrdinal: -1);
-        var totalCountOrdinal = GetTotalCountOrdinal(reader);
-
-        if (!await reader.ReadAsync(ct))
+        if (options.SingleFeature)
         {
-            writer.WriteStartObject();
-            writer.WriteNumber("numberReturned", 0);
-            writer.WriteStartArray("items");
-            writer.WriteEndArray();
-            writer.WriteEndObject();
-
+            if (!await reader.ReadAsync(ct)) { response.StatusCode = 404; return; }
+            WriteFeature(writer, reader, geometryOrdinal, idOrdinal, plan, options.Links?.Invoke(false));
             await writer.FlushAsync(ct);
             return;
         }
 
+        writer.WriteStartObject();
+        if (geojson) writer.WriteString("type", "FeatureCollection");
+        writer.WriteStartArray(geojson ? "features" : "items");
+        var returned = 0;
+        var hasNext = false;
         long? totalCount = null;
-
-        if (totalCountOrdinal >= 0 &&
-            !reader.IsDBNull(totalCountOrdinal))
-        {
-            totalCount = reader.GetInt64(totalCountOrdinal);
-        }
-
-        var returned = 1;
-
-        writer.WriteStartObject();
-
-        if (totalCount is not null)
-        {
-            writer.WriteNumber("numberMatched", totalCount.Value);
-        }
-
-        writer.WriteStartArray("items");
-
-        writer.WriteStartObject();
-        WritePlanFields(writer, reader, plan);
-        writer.WriteEndObject();
-
+        var totalCountOrdinal = GetTotalCountOrdinal(reader);
         while (await reader.ReadAsync(ct))
         {
+            if (options.PageSize is { } size && returned >= size) { hasNext = size > 0; break; }
+            if (returned == 0 && totalCountOrdinal >= 0 && !reader.IsDBNull(totalCountOrdinal))
+                totalCount = reader.GetInt64(totalCountOrdinal);
+            if (geojson) WriteFeature(writer, reader, geometryOrdinal, idOrdinal, plan, null);
+            else
+            {
+                writer.WriteStartObject();
+                WritePlanFields(writer, reader, plan);
+                writer.WriteEndObject();
+            }
             returned++;
-
-            writer.WriteStartObject();
-            WritePlanFields(writer, reader, plan);
-            writer.WriteEndObject();
+            if (returned % 64 == 0) await writer.FlushAsync(ct);
         }
-
         writer.WriteEndArray();
-
         writer.WriteNumber("numberReturned", returned);
-
+        if (totalCount is not null) writer.WriteNumber("numberMatched", totalCount.Value);
+        OgcSupport.WriteLinks(writer, options.Links?.Invoke(hasNext));
         writer.WriteEndObject();
-
         await writer.FlushAsync(ct);
     }
 
-    private static async Task WriteGeoJsonAsync(
-            HttpResponse response,
-            NpgsqlDataReader reader,
-            CancellationToken ct)
+    private static void WriteFeature(Utf8JsonWriter writer, NpgsqlDataReader reader, int geometryOrdinal,
+        int idOrdinal, (string Name, CellWriter Write)[] plan, IReadOnlyList<ApiLink>? links)
+    {
+        writer.WriteStartObject();
+        writer.WriteString("type", "Feature");
+        if (idOrdinal >= 0 && !reader.IsDBNull(idOrdinal))
         {
-            response.ContentType = "application/geo+json";
-
-            await using var writer = new Utf8JsonWriter(response.Body);
-
-            var geometryOrdinal = GetGeometryOrdinal(reader);
-            var plan = BuildPlan(reader, geometryOrdinal);
-
-            writer.WriteStartObject();
-            writer.WriteString("type", "FeatureCollection");
-            writer.WriteStartArray("features");
-
-            while (await reader.ReadAsync(ct))
-            {
-                writer.WriteStartObject();
-                writer.WriteString("type", "Feature");
-
-                writer.WritePropertyName("geometry");
-                WriteGeometry(writer, reader, geometryOrdinal);
-
-                writer.WriteStartObject("properties");
-                WritePlanFields(writer, reader, plan);
-                writer.WriteEndObject();
-
-                writer.WriteEndObject();
-            }
-
-            writer.WriteEndArray();
-            writer.WriteEndObject();
-
-            await writer.FlushAsync(ct);
+            writer.WritePropertyName("id");
+            ResolveWriter(reader.GetFieldType(idOrdinal), reader.GetDataTypeName(idOrdinal))(writer, reader, idOrdinal);
         }
+        writer.WritePropertyName("geometry");
+        WriteGeometry(writer, reader, geometryOrdinal);
+        writer.WriteStartObject("properties");
+        WritePlanFields(writer, reader, plan);
+        writer.WriteEndObject();
+        OgcSupport.WriteLinks(writer, links);
+        writer.WriteEndObject();
+    }
 
         private static void WritePlanFields(
             Utf8JsonWriter writer,
@@ -260,10 +199,10 @@ CancellationToken ct)
             writer.WriteEndArray();
         }
 
-        private static int GetGeometryOrdinal(NpgsqlDataReader reader)
+        private static int GetGeometryOrdinal(NpgsqlDataReader reader, string? geometryColumn)
         {
             for (var i = 0; i < reader.FieldCount; i++)
-                if (reader.GetName(i).Equals("geometry", StringComparison.OrdinalIgnoreCase))
+                if (reader.GetName(i).Equals(geometryColumn, StringComparison.OrdinalIgnoreCase))
                     return i;
             return -1;
         }

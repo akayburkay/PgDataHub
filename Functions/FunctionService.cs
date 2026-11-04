@@ -59,19 +59,25 @@ public sealed class FunctionService
         await ExecuteAsync(function, query, response, ct);
     }
 
-    private async Task ExecuteAsync(
+    internal async Task ExecuteAsync(
         FunctionMetadata function,
         IQueryCollection query,
         HttpResponse response,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool allowVolatile = false)
     {
+        if (function.IsVolatile && !allowVolatile)
+            throw new InvalidOperationException("VOLATILE functions require an explicitly authorized POST request.");
 
         await using var conn = await Db.OpenConnectionAsync(ct);
+        // A cached STABLE function may have been replaced by VOLATILE DDL.
+        // Enforce read-only execution in PostgreSQL as well as in cached metadata.
+        await using var transaction = !allowVolatile ? await conn.BeginTransactionAsync(ct) : null;
         await using var cmd = conn.CreateCommand();
         cmd.CommandTimeout = _config.DefaultTimeout;
 
         var args = BuildArguments(function, query, cmd);
-        cmd.CommandText = BuildSql(function, args);
+        cmd.CommandText = (transaction is not null ? "set transaction read only; " : "") + BuildSql(function, args);
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
 
@@ -104,6 +110,8 @@ public sealed class FunctionService
         }
 
         await writer.FlushAsync(ct);
+        await reader.DisposeAsync();
+        if (transaction is not null) await transaction.CommitAsync(ct);
     }
 
     private static string BuildArguments(

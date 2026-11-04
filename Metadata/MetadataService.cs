@@ -103,7 +103,9 @@ internal static class CollectionOverrideApplier
             GeometryType = geom is not null ? source.GeometryType : null,
             Srid = geom is not null ? source.Srid : null,
             PrimaryKey = pk,
-            Columns = cols
+            Columns = cols,
+            PolicyColumns = source.PolicyColumns ?? source.Columns,
+            RowFilters = source.RowFilters
         };
     }
 }
@@ -152,7 +154,7 @@ public sealed class MetadataService
     public async Task<object> GetAdminLookupAsync(CancellationToken ct = default)
     {
         var collections = await LoadCollectionsAsync(ct);
-        var functions = await LoadFunctionsAsync(ct);
+        var functions = await LoadFunctionsAsync(ct, includeVolatile: true);
         return new
         {
             collections = collections.Select(c => new
@@ -260,6 +262,10 @@ public sealed class MetadataService
     {
         var fullName = $"{f.Schema}.{f.Name}";
 
+        if (f.IsVolatile && !_config.Function.VolatileInclude.Any(pattern =>
+            Match(f.Name, pattern) || Match(fullName, pattern) || Match(f.Signature, pattern)))
+            return false;
+
         if (_config.Function.Exclude.Any(x =>
             Match(fullName, x) || Match(f.Signature, x)))
         {
@@ -335,10 +341,11 @@ public sealed class MetadataService
         return list;
     }
 
-    private async Task<IReadOnlyList<FunctionMetadata>> LoadFunctionsAsync(CancellationToken ct)
+    private async Task<IReadOnlyList<FunctionMetadata>> LoadFunctionsAsync(CancellationToken ct, bool includeVolatile = false)
     {
         await using var conn = await Db.OpenConnectionAsync(ct);
         await using var cmd = new NpgsqlCommand(MetadataSql.Functions, conn);
+        cmd.Parameters.AddWithValue("include_volatile", includeVolatile || _config.Function.VolatileInclude.Count > 0);
         await using var r = await cmd.ExecuteReaderAsync(ct);
 
         var list = new List<FunctionMetadata>();
@@ -352,7 +359,13 @@ public sealed class MetadataService
                 Name = r.GetString(2),
                 Signature = r.GetString(3),
                 ReturnType = Enum.Parse<FunctionReturnType>(r.GetString(4), true),
-                Description = r.IsDBNull(5) ? "" : r.GetString(5)
+                Description = r.IsDBNull(5) ? "" : r.GetString(5),
+                Volatility = r.GetString(6) switch
+                {
+                    "s" => FunctionVolatility.Stable,
+                    "i" => FunctionVolatility.Immutable,
+                    _ => FunctionVolatility.Volatile
+                }
             });
         }
 
