@@ -270,6 +270,28 @@ The listener continues LISTEN when event trigger installation is unavailable (fo
 
 ## Filtering
 
+### CQL2 filtering (implemented subset)
+
+`GET /collections/{schema}.{table}/items` accepts `filter` with `filter-lang=cql2-text` (the default) or `filter-lang=cql2-json`. Both encodings use the same validated expression tree and parameterized SQL compiler. Existing property, `bbox`, and `datetime` filters are combined with the CQL predicate using `AND`; collection row policies are applied separately using `AND` as well.
+
+```http
+GET /collections/public.buildings/items?filter=storeys%20%3E%205%20AND%20city%20%3D%20%27Ankara%27
+GET /collections/public.buildings/items?filter-lang=cql2-json&filter=%7B%22op%22%3A%22%3E%22%2C%22args%22%3A%5B%7B%22property%22%3A%22storeys%22%7D%2C5%5D%7D
+```
+
+Implemented: `AND`, `OR`, `NOT`, parentheses, `=`, `<>`, `!=`, `<`, `<=`, `>`, `>=`, `LIKE`, `IN`, `BETWEEN`, `IS NULL`, `IS NOT NULL`, property-to-property comparison, and basic `+`, `-`, `*`, `/`, `%` arithmetic. Spatial predicates `S_INTERSECTS`, `S_CONTAINS`, `S_WITHIN`, `S_DISJOINT`, `S_TOUCHES`, `S_CROSSES`, `S_OVERLAPS`, and `S_EQUALS` accept a visible geometry property and a Point/LineString/Polygon/Multi geometry literal or 2D BBOX. Text uses WKT geometry syntax; JSON uses GeoJSON geometry literals. `filter-crs` specifies the literal's CRS (default 4326), which is transformed to the stored geometry CRS before comparison. `DATE`/`TIMESTAMP` literals and `T_AFTER`, `T_BEFORE`, `T_EQUALS`, `T_INTERSECTS`, `T_DISJOINT` work for date/timestamp properties and point-in-time literals.
+
+```http
+GET /collections/public.buildings/items?filter=S_INTERSECTS(geom,POINT(29%2041))&filter-crs=EPSG:4326
+GET /collections/public.buildings/items?filter=T_AFTER(observed_at,DATE('2026-01-01'))
+```
+
+Text strings use doubled single quotes. Only visible collection columns can be referenced. Filters are limited to 8192 characters, 512 text tokens, and 24 expression levels.
+
+This is **not full CQL2 conformance**. Full temporal interval relations, all arithmetic operators, every geometry literal and CRS edge case, custom functions, case/accent-insensitive operators, and array operators are not implemented. No CQL2 conformance class is advertised until the corresponding OGC test suite is satisfied. The existing `bbox`, `datetime`, and spatial analysis endpoints remain available. `dwithin` in spatial analysis is a PgDataHub extension, not a CQL2 spatial predicate. Unsupported syntax returns `400`.
+
+Large spatial collections should have a GiST index on the geometry column for responsive BBOX requests. For example, `CREATE INDEX CONCURRENTLY tucbs_jeoloji_geom_gist ON public.tucbs_jeoloji USING gist (geom);` reduced an example indexed BBOX scan from 170 ms to 9.7 ms on a 213,026-row table. Full-resolution GeoJSON transfer and client rendering still scale with the number and size of matching geometries.
+
 Any query parameter that is not a reserved key is treated as a property filter.
 
 ### Operators

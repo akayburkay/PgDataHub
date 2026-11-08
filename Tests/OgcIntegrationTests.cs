@@ -12,6 +12,111 @@ namespace PgDataHub.Tests;
 public sealed class OgcIntegrationTests
 {
     [Fact]
+    public async Task Untyped_geometry_uses_stored_srid_for_bbox_and_geojson()
+    {
+        JsonWriterTests.InitializeDatabase();
+        var schema = "pgdh_srid_" + Guid.NewGuid().ToString("N");
+        await using var connection = await PgDataHub.Config.Db.OpenConnectionAsync();
+        try
+        {
+            await using (var create = new NpgsqlCommand($"""
+                create schema {schema};
+                create table {schema}.features(id integer primary key, geom geometry);
+                insert into {schema}.features values (1, ST_SetSRID(ST_Point(30, 40), 4326));
+                """, connection))
+                await create.ExecuteNonQueryAsync();
+
+            await using var api = new ApiRegressionTests.TestApi(c =>
+                c.Roles.Single().CollectionsAllow = [schema + ".features"]);
+            using var client = api.Factory.CreateClient();
+            client.DefaultRequestHeaders.Add("X-API-Key", api.Key);
+            using var response = await client.GetAsync($"/collections/{schema}.features/items?bbox=25,35,35,45");
+            Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync());
+            using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal(1, json.RootElement.GetProperty("numberReturned").GetInt32());
+            Assert.Equal(30, json.RootElement.GetProperty("features")[0]
+                .GetProperty("geometry").GetProperty("coordinates")[0].GetDouble());
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"drop schema if exists {schema} cascade", connection);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    public async Task Cql_and_legacy_filter_smoke_performance()
+    {
+        await using var fixture = await Fixture.Create();
+        using var client = fixture.Client();
+        async Task<long> Measure(string query)
+        {
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            for (var i = 0; i < 40; i++)
+            {
+                using var response = await client.GetAsync($"/collections/{fixture.Id}/items?{query}");
+                Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync());
+            }
+            return watch.ElapsedMilliseconds;
+        }
+        await Measure("id=1"); // warm-up
+        var legacyMs = await Measure("id=1");
+        var cqlMs = await Measure("filter=id%20%3D%201");
+        Console.WriteLine($"40 real PostGIS requests: legacy={legacyMs}ms, CQL2={cqlMs}ms");
+    }
+
+    [Fact]
+    [Trait("Category", "Benchmark")]
+    public async Task Concurrent_cql_http_smoke_performance()
+    {
+        await using var fixture = await Fixture.Create();
+        using var client = fixture.Client();
+        await client.GetAsync($"/collections/{fixture.Id}/items?filter=id%20%3E%200");
+        foreach (var concurrency in new[] { 10, 50, 100 })
+        {
+            var elapsed = System.Diagnostics.Stopwatch.StartNew();
+            var results = await Task.WhenAll(Enumerable.Range(0, concurrency).Select(async _ =>
+            {
+                var watch = System.Diagnostics.Stopwatch.StartNew();
+                using var response = await client.GetAsync($"/collections/{fixture.Id}/items?filter=id%20%3E%200");
+                return (Ms: watch.Elapsed.TotalMilliseconds, Success: response.IsSuccessStatusCode);
+            }));
+            var sorted = results.Select(r => r.Ms).Order().ToArray();
+            Assert.All(results, r => Assert.True(r.Success));
+            Console.WriteLine($"HTTP concurrent={concurrency} avg={sorted.Average():F1}ms p50={sorted[(int)(sorted.Length * .5)]:F1}ms p95={sorted[Math.Min(sorted.Length - 1, (int)(sorted.Length * .95))]:F1}ms p99={sorted[Math.Min(sorted.Length - 1, (int)(sorted.Length * .99))]:F1}ms rps={concurrency / elapsed.Elapsed.TotalSeconds:F1} errors={results.Count(r => !r.Success)}");
+        }
+    }
+    [Fact]
+    public async Task Cql_text_json_spatial_and_row_policy_work_on_postgis()
+    {
+        await using var fixture = await Fixture.Create();
+        await fixture.Sql($"alter table {fixture.Id} add observed_at date; update {fixture.Id} set observed_at = '2026-01-01' where id = 1; update {fixture.Id} set observed_at = '2026-02-01' where id = 2;");
+        using var client = fixture.Client();
+        async Task<int> Count(string filter, string extra = "")
+        {
+            using var response = await client.GetAsync($"/collections/{fixture.Id}/items?count=true&filter={Uri.EscapeDataString(filter)}{extra}");
+            Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync());
+            using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            return body.RootElement.GetProperty("numberMatched").GetInt32();
+        }
+        Assert.Equal(1, await Count("S_INTERSECTS(geom,POINT(5 5))", "&filter-crs=EPSG:3857"));
+        Assert.Equal(1, await Count("""{"op":"s_intersects","args":[{"property":"geom"},{"type":"Point","coordinates":[5,5]}]}""", "&filter-lang=cql2-json&filter-crs=EPSG:3857"));
+        Assert.Equal(1, await Count("id = 1 OR id = 3")); // id=3 is hidden by row policy
+        Assert.Equal(1, await Count("T_AFTER(observed_at,DATE('2026-01-15'))"));
+        Assert.Equal(1, await Count("id + 1 = 3"));
+        Assert.Equal(1, await Count("id > 0", "&label=Alpha*&bbox=19,19,31,31&bbox-crs=EPSG:3857"));
+        using var hidden = await client.GetAsync($"/collections/{fixture.Id}/items?filter=tenant_id%20%3D%202");
+        Assert.Equal(HttpStatusCode.BadRequest, hidden.StatusCode);
+        using var malformed = await client.GetAsync($"/collections/{fixture.Id}/items?filter-lang=cql2-json&filter={Uri.EscapeDataString("""{"op":"s_intersects","args":[{"property":"geom"},{"bbox":["bad",1,2,3]}]}""")}");
+        Assert.Equal(HttpStatusCode.BadRequest, malformed.StatusCode);
+        using var badCrs = await client.GetAsync($"/collections/{fixture.Id}/items?filter=S_INTERSECTS(geom,POINT(5%205))&filter-crs=EPSG:999999");
+        Assert.Equal(HttpStatusCode.BadRequest, badCrs.StatusCode);
+        using var badWkt = await client.GetAsync($"/collections/{fixture.Id}/items?filter=S_INTERSECTS(geom,POINT(5))");
+        Assert.Equal(HttpStatusCode.BadRequest, badWkt.StatusCode);
+        using var badGeoJson = await client.GetAsync($"/collections/{fixture.Id}/items?filter-lang=cql2-json&filter={Uri.EscapeDataString("""{"op":"s_intersects","args":[{"property":"geom"},{"type":"Point","coordinates":[5]}]}""")}");
+        Assert.Equal(HttpStatusCode.BadRequest, badGeoJson.StatusCode);
+    }
+    [Fact]
     public async Task Temporal_intervals_and_null_geometries_follow_core_matching_rules()
     {
         await using var fixture = await Fixture.Create();

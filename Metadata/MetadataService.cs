@@ -338,6 +338,20 @@ public sealed class MetadataService
             if (colLookup.TryGetValue(Key(c.Schema, c.Name), out var cols))
                 c.Columns = cols;
 
+        // geometry_columns reports SRID 0 for unconstrained geometry columns even
+        // when the stored geometries have a valid SRID. Use a stored value before
+        // building ST_Transform expressions for these collections.
+        foreach (var c in list.Where(c => c.IsSpatial && c.Srid == 0 && c.GeometryColumn is not null))
+        {
+            static string Q(string value) => "\"" + value.Replace("\"", "\"\"") + "\"";
+            var sql = $"select ST_SRID({Q(c.GeometryColumn!)}) from {Q(c.Schema)}.{Q(c.Name)} " +
+                      $"where {Q(c.GeometryColumn!)} is not null limit 1";
+            await using var cmd = new NpgsqlCommand(sql, conn);
+            var value = await cmd.ExecuteScalarAsync(ct);
+            if (value is int srid && srid > 0)
+                c.Srid = srid;
+        }
+
         return list;
     }
 

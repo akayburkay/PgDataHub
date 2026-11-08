@@ -143,6 +143,9 @@ public sealed class OpenApiController(ISwaggerProvider swagger, CollectionAccess
         Add("count", new { type = "boolean", @default = false }, "Include authorized numberMatched; may scan all matching rows.");
         Add("distinct", new { type = "boolean", @default = false }, "Deduplicate projected values.");
         Add("datetime", new { type = "string" }, "RFC3339 instant or start/end interval; first visible date/timestamp property is used. Missing temporal values match.");
+        Add("filter", new { type = "string" }, "CQL2 filter expression (supported scalar, spatial, and temporal subset).");
+        Add("filter-lang", new { type = "string", @enum = new[] { "cql2-text", "cql2-json" }, @default = "cql2-text" }, "Encoding of filter.");
+        Add("filter-crs", new { type = "string" }, "CRS of CQL2 geometry and BBOX literals; defaults to CRS84.");
         if (collection.IsSpatial)
         {
             Add("bbox", new { type = "array", items = new { type = "number" }, oneOf = new[] {

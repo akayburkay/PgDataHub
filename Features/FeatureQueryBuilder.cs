@@ -40,6 +40,8 @@ public sealed class FeatureQueryParameters
     public bool Count { get; init; }
     public TemporalInterval? DateTime { get; init; }
     public IReadOnlyList<PropertyFilter> Filters { get; init; } = [];
+    public CqlNode? Cql { get; init; }
+    public int FilterCrsSrid { get; init; } = 4326;
 }
 
 public static class ReservedQueryKeys
@@ -47,7 +49,7 @@ public static class ReservedQueryKeys
     public static readonly HashSet<string> Names = new(StringComparer.OrdinalIgnoreCase)
     {
         "limit", "offset", "select", "distinct", "orderby",
-        "bbox", "bbox-crs", "crs", "datetime", "count", "f"
+        "bbox", "bbox-crs", "crs", "datetime", "count", "f", "filter", "filter-lang", "filter-crs"
     };
 }
 
@@ -106,6 +108,8 @@ public sealed class FeatureQueryBuilder
         AppendBboxFilter(collection, parameters.Bbox, parameters.BboxCrsSrid, whereClauses, sqlParameters);
 
         AppendPropertyFilters(collection, parameters.Filters, whereClauses, sqlParameters);
+        if (parameters.Cql is not null)
+            whereClauses.Add(CqlSql.Compile(parameters.Cql, collection, parameters.FilterCrsSrid, sqlParameters));
         AppendRowFilters(collection, whereClauses, sqlParameters);
         AppendTemporalFilter(collection, parameters.DateTime, whereClauses, sqlParameters);
         if (analysisPlan?.Predicate is { } predicate) whereClauses.Add(predicate);
@@ -488,7 +492,7 @@ limit 1
     }
 
 
-    private static NpgsqlParameter CreateParameter(
+    internal static NpgsqlParameter CreateParameter(
         string name,
         ColumnMetadata column,
         string raw)
@@ -721,6 +725,22 @@ public static class FeatureQueryParametersParser
        
 
         var filters = new List<PropertyFilter>();
+        CqlNode? cql = null;
+        var filterCrs = query.TryGetValue("filter-crs", out var rawFilterCrs) && !string.IsNullOrWhiteSpace(rawFilterCrs) ? ParseCrs(rawFilterCrs, "filter-crs") : 4326;
+        if (query.TryGetValue("filter", out var filter))
+        {
+            if (string.IsNullOrWhiteSpace(filter) || filter.Length > 8192)
+                throw new ArgumentException("filter must contain 1 to 8192 characters.");
+            var language = query.TryGetValue("filter-lang", out var lang) ? lang : "cql2-text";
+            cql = language?.ToLowerInvariant() switch
+            {
+                "cql2-text" => CqlParser.ParseText(filter),
+                "cql2-json" => CqlParser.ParseJson(filter),
+                _ => throw new ArgumentException("Unsupported filter-lang; use cql2-text or cql2-json.")
+            };
+        }
+        else if (query.ContainsKey("filter-lang") || query.ContainsKey("filter-crs"))
+            throw new ArgumentException("filter-lang and filter-crs require filter.");
 
         foreach (var (rawKey, rawValue) in query)
         {
@@ -765,7 +785,9 @@ public static class FeatureQueryParametersParser
             ResponseCrsSrid = responseCrs,
             Count = count,
             DateTime = query.TryGetValue("datetime", out var datetime) ? TemporalInterval.Parse(datetime ?? "") : null,
-            Filters = filters
+            Filters = filters,
+            Cql = cql,
+            FilterCrsSrid = filterCrs
         };
     }
 
